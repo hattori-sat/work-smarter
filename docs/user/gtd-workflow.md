@@ -43,8 +43,8 @@ doingは1件だけです。割込み時は元のtaskをstopするか、明示的
 
 ## Waiting-for
 
-初期版ではclarify時に相手または外部条件を記録し、follow-up日をweekly reviewへ出します。
-拡張版では依頼日時、期待期限、応答履歴、escalationをticketに保持します。
+clarify時に相手または外部条件を記録し、依頼日時、期待期限、follow-up、escalationをticketへ
+保持します。blockerが重なってもWaitingという委任文脈は失われず、reviewでは両方の観点に現れます。
 
 応答が来たら次のactionへ戻します。
 

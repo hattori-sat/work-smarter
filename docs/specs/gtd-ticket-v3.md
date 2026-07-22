@@ -1,6 +1,6 @@
-# GTD Task Ticket schema v2
+# GTD Task Ticket schema v3
 
-- Status: Accepted for implementation
+- Status: Implemented
 - Date: 2026-07-23
 - Branch: `feat/gtd-ticket-model`
 
@@ -60,7 +60,7 @@ Inbox captureにはrigorを要求しない。known actionのquick-addは`quick`�
 ## Persistent shape
 
 ```yaml
-schema_version: 2
+schema_version: 3
 id: TASK-20260723-ABC123
 kind: task
 revision: 1
@@ -88,6 +88,10 @@ energy: high
 original_estimate_minutes: 45
 remaining_estimate_minutes: 45
 actual_minutes: 0
+urgency: high
+impact: high
+commitment: committed
+work_logs: []
 
 schedule:
   not_before: null
@@ -113,6 +117,16 @@ completion:
       met_at: null
       evidence: null
   waiver_reason: null
+  assurance_reviewed_at: null
+  assurance_review_hash: null
+  assurance_grandfathered: false
+
+recurrence:
+  frequency: weekly
+  interval: 2
+  anchor_on: 2026-07-23
+recurrence_series_id: TASK-20260723-ABC123
+occurrence_on: 2026-07-23
 
 resolution: null
 result_summary: null
@@ -135,23 +149,35 @@ snapshotとして埋めるが、frontmatterを正とする。
 
 - `parent_id`: 作業分解だけに使う。
 - `blocks`: source完了までtargetを開始できない方向付きlink。
+- `depends_on`: sourceがtargetの完了を必要とする、`blocks`の逆向き表現。
 - `relates_to`: 実行制約を持たない関連。
 - `duplicates`: sourceはtargetと重複。
 - `implements`: sourceがtargetの要求・決定等を実装する。
 
-`blocks` graphはcycleを拒否する。project ownershipは`project_id`一件、その他projectとの関係は
+dependency graphは表現方法にかかわらずcycleを拒否する。project ownershipは`project_id`一件、その他projectとの関係は
 relationで表す。
+
+## Priority, effort, and recurrence
+
+- opaqueなpriority scoreは保存しない。`urgency`、`impact`、`commitment`を別々に判断する。
+- original estimateは最初の予測として不変にする。
+- remaining estimateの変更には理由を要求し、work log追加時は実績分を自動減算できる。
+- timer/manual work logをtaskとaudit eventの双方へ追記し、`actual_minutes`を投影する。
+- recurrenceは`daily | weekly | monthly`とintervalを持つ。完了したtaskを再openせず、新IDの
+  次回occurrenceを生成する。
 
 ## Schema migration
 
-Task v1はread時にmemory上でv2へ変換し、次回writeでv2として保存する。
+Task v1/v2はread時にmemory上でv3へ変換し、次回writeでv3として保存する。
 
 - `status` → lifecycle/disposition/execution/blocker
 - `estimate_minutes` → original/remaining estimate
 - `not_before/scheduled_for/due_on` → schedule
 - `waiting_for/follow_up_on` → waiting
 - `completion_criteria` → completion conditions
-- existing taskはbehavior互換のため`quick`
+- existing v1 taskはbehavior互換のため`quick`
+- v2で既に完了していたrigorous taskは、当時存在しなかったassurance review markerを
+  `assurance_grandfathered`として明示し、読めなくなることを防ぐ
 
 原文backupを暗黙作成せず、migration commandを追加するまでは個別write時のlazy migrationとする。
 
@@ -162,14 +188,15 @@ Task v1はread時にmemory上でv2へ変換し、次回writeでv2として保存
 - calendar dispositionはscheduled_for必須。
 - unresolved task blockerまたは`blocks` predecessorがあれば開始不可。
 - standard/assuredはgoalとcondition必須。
-- assured完了は全conditionのevidence必須。
+- assured完了は全conditionのevidenceとconstraints/assumptions review記録が必須。review hashが
+  現在の内容と一致しなければstaleとして拒否する。
 - completedはcompleted_atとresolution必須。
 - parent/blocks cycleは禁止。
 - original estimateは通常操作で上書きせず、変更はaudit eventに理由を残す。
 
 ## TDD acceptance
 
-1. v1 Markdownを読むとv2 Taskになり、write後はv2 frontmatterになる。
+1. v1/v2 Markdownを読むとv3 Taskになり、write後はv3 frontmatterになる。
 2. quick Taskはtitleだけで作成・完了できる。
 3. standard Taskはgoalまたはcondition不足を拒否する。
 4. assured Taskはevidence不足の完了を拒否する。
@@ -179,9 +206,12 @@ Task v1はread時にmemory上でv2へ変換し、次回writeでv2として保存
 8. blocks relationは開始を止め、predecessor完了後に解除される。
 9. blocks/parent cycleを作るlinkを拒否する。
 10. Markdown body templateにrigor sectionsが生成される。
+11. parentとdependency cycle、missing referenceをservice/doctorが拒否する。
+12. manual/timer work logがmetricsへ一度だけ反映される。
+13. recurrence完了時は履歴を残したまま別IDの次回taskが生成される。
 
 ## Unknowns
 
 - `goal`と`desired_outcome`をdogfooding後も別fieldとして維持する価値。
 - relationをTask内へ複製するか、独立edge entityへ移す時期。
-- RFC 5545 recurrenceはschema v2後続sliceで判断する。
+- より複雑な営業日・RRULE互換recurrenceを導入する時期。
