@@ -67,6 +67,7 @@ from work_smarter.gtd.models import (
     WeeklyReviewSession,
     WeeklyReviewStep,
     WorkLog,
+    WorkLogCorrection,
     WorkLogSource,
     WorkType,
     utc_now,
@@ -739,6 +740,72 @@ class GtdService:
                 stopped_at=stopped_at,
             )
 
+    @staticmethod
+    def _effective_work_log_minutes(task: Task) -> dict[str, float]:
+        effective = {log.id: log.minutes for log in GtdService._logs_with_legacy_actual(task)}
+        for correction in task.work_log_corrections:
+            effective[correction.work_log_id] = correction.corrected_minutes
+        return effective
+
+    def correct_work_log(
+        self,
+        task_id: str,
+        work_log_id: str,
+        *,
+        corrected_minutes: float,
+        reason: str,
+    ) -> Task:
+        """Append an auditable correction without rewriting the original work log."""
+
+        clean_reason = reason.strip()
+        if corrected_minutes < 0:
+            raise InvalidTransitionError("Corrected work-log minutes cannot be negative")
+        if not clean_reason:
+            raise InvalidTransitionError("Correcting a work log requires a reason")
+        with self.workspace.lock():
+            record = self._task_record(task_id)
+            task = record.entity
+            effective = self._effective_work_log_minutes(task)
+            previous = effective.get(work_log_id)
+            if previous is None:
+                raise EntityNotFoundError(f"No work log {work_log_id!r} on {task.id}")
+            if abs(previous - corrected_minutes) <= 0.000001:
+                raise InvalidTransitionError(
+                    f"Work log {work_log_id} is already {corrected_minutes} minutes"
+                )
+            correction = WorkLogCorrection(
+                id=_new_id("WLC"),
+                work_log_id=work_log_id,
+                previous_minutes=previous,
+                corrected_minutes=corrected_minutes,
+                reason=clean_reason,
+            )
+            effective[work_log_id] = corrected_minutes
+            updated = self._evolve_task(
+                task,
+                actual_minutes=round(sum(effective.values()), 2),
+                work_log_corrections=[
+                    *(
+                        item.model_dump(mode="json", exclude_none=True)
+                        for item in task.work_log_corrections
+                    ),
+                    correction.model_dump(mode="json", exclude_none=True),
+                ],
+            )
+            self._write_task(record, updated)
+            self._event(
+                EventType.TASK_WORK_LOG_CORRECTED,
+                entity_id=task.id,
+                payload={
+                    "correction_id": correction.id,
+                    "work_log_id": correction.work_log_id,
+                    "from_minutes": correction.previous_minutes,
+                    "to_minutes": correction.corrected_minutes,
+                    "reason": correction.reason,
+                },
+            )
+            return updated
+
     def _append_work_log(
         self,
         record: EntityRecord[Task],
@@ -754,6 +821,7 @@ class GtdService:
         if minutes <= 0:
             raise InvalidTransitionError("Work log minutes must be greater than zero")
         existing_logs = self._logs_with_legacy_actual(task)
+        effective_existing = self._effective_work_log_minutes(task)
         log = WorkLog(
             id=f"WL-{len(existing_logs) + 1}",
             minutes=max(round(minutes, 6), 0.000001),
@@ -767,7 +835,7 @@ class GtdService:
             remaining = max(0, round(remaining - log.minutes, 2))
         updates: dict[str, Any] = {
             "actual_minutes": round(
-                sum(item.minutes for item in [*existing_logs, log]),
+                sum(effective_existing.values()) + log.minutes,
                 2,
             ),
             "remaining_estimate_minutes": remaining,
@@ -1721,7 +1789,7 @@ class GtdService:
             )
 
         now = utc_now()
-        actual_minutes = task.actual_minutes
+        actual_minutes = round(sum(self._effective_work_log_minutes(task).values()), 2)
         remaining_estimate = task.remaining_estimate_minutes
         work_logs = self._logs_with_legacy_actual(task)
         timer_log: WorkLog | None = None
@@ -1740,7 +1808,7 @@ class GtdService:
                 stopped_at=now,
             )
             work_logs.append(timer_log)
-            actual_minutes = round(sum(item.minutes for item in work_logs), 2)
+            actual_minutes = round(actual_minutes + timer_minutes, 2)
             if remaining_estimate is not None:
                 remaining_estimate = max(0, round(remaining_estimate - timer_minutes, 2))
         completion = task.completion.model_copy(
@@ -1835,6 +1903,7 @@ class GtdService:
                 "remaining_estimate_minutes": completed.original_estimate_minutes,
                 "actual_minutes": 0,
                 "work_logs": [],
+                "work_log_corrections": [],
                 "schedule": TaskSchedule().model_dump(mode="json"),
                 "waiting": None,
                 "waiting_history": [],

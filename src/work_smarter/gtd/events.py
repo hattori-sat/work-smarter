@@ -24,6 +24,7 @@ class EventType(StrEnum):
     TASK_RESPONSE_RECORDED = "gtd.task.response.recorded"
     TASK_RECURRENCE_CREATED = "gtd.task.recurrence.created"
     TASK_RECURRENCE_SET = "gtd.task.recurrence.set"
+    TASK_WORK_LOG_CORRECTED = "gtd.task.work.corrected"
     TASK_WORK_LOGGED = "gtd.task.work.logged"
     TASK_READY = "gtd.task.ready"
     TASK_SCHEDULED = "gtd.task.scheduled"

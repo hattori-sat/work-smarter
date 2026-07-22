@@ -293,3 +293,53 @@ def test_weekly_review_session_is_resumable_and_requires_checked_steps(
 
     next_session = service.start_weekly_review()
     assert next_session.id != first.id
+
+
+def test_work_log_correction_is_append_only_and_updates_effective_actual(
+    service: GtdService,
+) -> None:
+    task_id = (
+        service.add_next_action(
+            "Correct a mistaken timer",
+            estimate_minutes=60,
+        )
+        .created[0]
+        .id
+    )
+    logged = service.log_work(task_id, minutes=30, note="Timer ran during lunch")
+    remaining_after_log = logged.remaining_estimate_minutes
+
+    corrected = service.correct_work_log(
+        task_id,
+        logged.work_logs[0].id,
+        corrected_minutes=20,
+        reason="Ten minutes were not active work",
+    )
+
+    assert corrected.work_logs[0].minutes == 30
+    assert corrected.work_log_corrections[0].previous_minutes == 30
+    assert corrected.work_log_corrections[0].corrected_minutes == 20
+    assert corrected.actual_minutes == 20
+    assert corrected.remaining_estimate_minutes == remaining_after_log
+    assert service.metrics().focus_minutes_total == 20
+
+
+def test_metrics_report_current_waiting_and_blocked_age(
+    service: GtdService,
+) -> None:
+    task_id = service.add_next_action("Wait while separately blocked").created[0].id
+    delegated = service.delegate_task(task_id, target="Owner")
+    blocked = service.block_task(task_id, "Environment unavailable")
+    assert delegated.waiting is not None
+    assert blocked.blockers[-1].resolved_at is None
+
+    as_of = max(
+        delegated.waiting.delegated_at,
+        blocked.blockers[-1].created_at,
+    ) + timedelta(hours=2)
+    report = service.metrics(as_of=as_of)
+
+    assert report.waiting_current == 1
+    assert report.blocked_current == 1
+    assert report.oldest_waiting_age_hours == pytest.approx(2, abs=0.01)
+    assert report.oldest_blocked_age_hours == pytest.approx(2, abs=0.01)

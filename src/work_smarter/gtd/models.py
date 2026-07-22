@@ -392,6 +392,23 @@ class WorkLog(StrictModel):
         return self
 
 
+class WorkLogCorrection(StrictModel):
+    id: str
+    work_log_id: str
+    previous_minutes: float = Field(ge=0)
+    corrected_minutes: float = Field(ge=0)
+    reason: str
+    recorded_at: datetime = Field(default_factory=utc_now)
+
+    @field_validator("id", "work_log_id", "reason")
+    @classmethod
+    def validate_required_text(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("work-log correction ID, target, and reason cannot be blank")
+        return cleaned
+
+
 class RecurrenceRule(StrictModel):
     frequency: RecurrenceFrequency
     interval: int = Field(default=1, ge=1)
@@ -443,6 +460,7 @@ class Task(StrictModel):
     remaining_estimate_minutes: float | None = Field(default=None, ge=0)
     actual_minutes: float = Field(default=0, ge=0)
     work_logs: list[WorkLog] = Field(default_factory=list)
+    work_log_corrections: list[WorkLogCorrection] = Field(default_factory=list)
     schedule: TaskSchedule = Field(default_factory=TaskSchedule)
     waiting: WaitingDetail | None = None
     waiting_history: list[WaitingDetail] = Field(default_factory=list)
@@ -591,6 +609,24 @@ class Task(StrictModel):
             waiting_ids.append(self.waiting.id)
         if len(waiting_ids) != len(set(waiting_ids)):
             raise ValueError("waiting cycle IDs must be unique")
+        work_log_ids = [item.id for item in self.work_logs]
+        if len(work_log_ids) != len(set(work_log_ids)):
+            raise ValueError("work log IDs must be unique")
+        correction_ids = [item.id for item in self.work_log_corrections]
+        if len(correction_ids) != len(set(correction_ids)):
+            raise ValueError("work log correction IDs must be unique")
+        effective_minutes = {item.id: item.minutes for item in self.work_logs}
+        for correction in self.work_log_corrections:
+            previous = effective_minutes.get(correction.work_log_id)
+            if previous is None:
+                raise ValueError(
+                    f"work log correction targets missing log {correction.work_log_id}"
+                )
+            if abs(previous - correction.previous_minutes) > 0.000001:
+                raise ValueError(
+                    f"work log correction chain for {correction.work_log_id} is inconsistent"
+                )
+            effective_minutes[correction.work_log_id] = correction.corrected_minutes
         if self.disposition is TaskDisposition.CALENDAR and self.schedule.scheduled_for is None:
             raise ValueError("calendar tasks require scheduled_for")
         if self.lifecycle is not TaskLifecycle.OPEN:
@@ -942,6 +978,11 @@ class MetricsReport(StrictModel):
     wip_current: int = 0
     waiting_current: int = 0
     blocked_current: int = 0
+    average_current_waiting_age_hours: float | None = None
+    oldest_waiting_age_hours: float | None = None
+    average_current_blocked_age_hours: float | None = None
+    oldest_blocked_age_hours: float | None = None
+    cycle_time_sample_count: int = 0
 
 
 class EventPayload(StrictModel):

@@ -136,6 +136,8 @@ def project_metrics(
     logged_seconds_by_task: dict[str, float] = {}
     legacy_stopped_seconds_by_task: dict[str, float] = {}
     seen_work_logs: set[tuple[str, str]] = set()
+    effective_work_log_seconds: dict[tuple[str, str], float] = {}
+    seen_corrections: set[str] = set()
 
     active_cycles: dict[str, datetime] = {}
     cycle_seconds: list[float] = []
@@ -162,9 +164,28 @@ def project_metrics(
                 work_log_key = (entity_id, work_log_id)
                 if work_log_key not in seen_work_logs:
                     seen_work_logs.add(work_log_key)
+                    logged_seconds = _payload_number(event.payload, "minutes") * 60
+                    effective_work_log_seconds[work_log_key] = logged_seconds
+                    logged_seconds_by_task[entity_id] = (
+                        logged_seconds_by_task.get(entity_id, 0.0) + logged_seconds
+                    )
+            elif event.type == EventType.TASK_WORK_LOG_CORRECTED:
+                correction_id = str(event.payload.get("correction_id") or f"event:{event.id}")
+                work_log_id = str(event.payload.get("work_log_id") or "").strip()
+                work_log_key = (entity_id, work_log_id)
+                if (
+                    correction_id not in seen_corrections
+                    and work_log_id
+                    and work_log_key in effective_work_log_seconds
+                ):
+                    seen_corrections.add(correction_id)
+                    previous_seconds = effective_work_log_seconds[work_log_key]
+                    corrected_seconds = _payload_number(event.payload, "to_minutes") * 60
+                    effective_work_log_seconds[work_log_key] = corrected_seconds
                     logged_seconds_by_task[entity_id] = (
                         logged_seconds_by_task.get(entity_id, 0.0)
-                        + _payload_number(event.payload, "minutes") * 60
+                        - previous_seconds
+                        + corrected_seconds
                     )
             elif event.type == EventType.TASK_STOPPED and not event.payload.get("work_log_id"):
                 legacy_stopped_seconds_by_task[entity_id] = legacy_stopped_seconds_by_task.get(
@@ -258,6 +279,33 @@ def project_metrics(
         for task in completed
         if task.estimate_minutes and focus_seconds_by_task.get(task.id, 0.0) > 0
     ]
+    waiting_ages = [
+        max(
+            0.0,
+            (projected_at - _aware(task.waiting.delegated_at)).total_seconds() / 3600,
+        )
+        for task in snapshots
+        if task.waiting is not None and _aware(task.waiting.delegated_at) <= projected_at
+    ]
+    blocked_ages = [
+        max(
+            0.0,
+            (
+                projected_at
+                - min(
+                    _aware(blocker.created_at)
+                    for blocker in task.blockers
+                    if blocker.resolved_at is None
+                )
+            ).total_seconds()
+            / 3600,
+        )
+        for task in snapshots
+        if any(
+            blocker.resolved_at is None and _aware(blocker.created_at) <= projected_at
+            for blocker in task.blockers
+        )
+    ]
 
     return MetricsReport(
         generated_at=projected_at,
@@ -273,6 +321,7 @@ def project_metrics(
         average_cycle_time_hours=(
             round(sum(cycle_seconds) / len(cycle_seconds) / 3600, 2) if cycle_seconds else None
         ),
+        cycle_time_sample_count=len(cycle_seconds),
         waiting_minutes_total=round(
             sum(_seconds(intervals) for intervals in waiting_intervals.values()) / 60,
             2,
@@ -284,4 +333,12 @@ def project_metrics(
         wip_current=sum(task.status is TaskStatus.DOING for task in snapshots),
         waiting_current=sum(task.waiting is not None for task in snapshots),
         blocked_current=sum(task.status is TaskStatus.BLOCKED for task in snapshots),
+        average_current_waiting_age_hours=(
+            round(sum(waiting_ages) / len(waiting_ages), 2) if waiting_ages else None
+        ),
+        oldest_waiting_age_hours=(round(max(waiting_ages), 2) if waiting_ages else None),
+        average_current_blocked_age_hours=(
+            round(sum(blocked_ages) / len(blocked_ages), 2) if blocked_ages else None
+        ),
+        oldest_blocked_age_hours=(round(max(blocked_ages), 2) if blocked_ages else None),
     )
