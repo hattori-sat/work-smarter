@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sys
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -23,6 +24,8 @@ from work_smarter.gtd.models import (
     Task,
     TaskRigor,
     Urgency,
+    WeeklyReviewSession,
+    WeeklyReviewStep,
     WorkType,
 )
 from work_smarter.gtd.service import GtdService
@@ -37,7 +40,13 @@ task_app = typer.Typer(
     help="Define, inspect, verify, and relate durable GTD work tickets.",
     no_args_is_help=True,
 )
+review_app = typer.Typer(
+    help="Run and resume a durable GTD weekly review.",
+    invoke_without_command=True,
+    no_args_is_help=False,
+)
 app.add_typer(task_app, name="task")
+app.add_typer(review_app, name="review")
 
 
 @dataclass(slots=True)
@@ -89,6 +98,18 @@ def _emit(ctx: typer.Context, value: Any) -> None:
         typer.echo(str(value))
 
 
+def _iso_date(value: str | None, *, option: str) -> date | None:
+    if value is None:
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError as exc:
+        raise typer.BadParameter(
+            "must be an ISO date (YYYY-MM-DD)",
+            param_hint=option,
+        ) from exc
+
+
 def _show_task_ticket(task: Task) -> None:
     """Render the fields needed to decide and execute personal work."""
 
@@ -114,6 +135,12 @@ def _show_task_ticket(task: Task) -> None:
             f"Recurrence: every {task.recurrence.interval} "
             f"{task.recurrence.frequency.value}; next={task.next_occurrence_on}"
         )
+    if task.schedule.due_on:
+        typer.echo(f"Due: {task.schedule.due_on}")
+    if task.schedule.not_before:
+        typer.echo(f"Deferred until: {task.schedule.not_before.isoformat()}")
+    if task.schedule.scheduled_for:
+        typer.echo(f"Scheduled for: {task.schedule.scheduled_for.isoformat()}")
     for label, value in (
         ("Goal", task.goal),
         ("Why", task.why),
@@ -140,6 +167,25 @@ def _show_task_ticket(task: Task) -> None:
         typer.echo("\nRelations")
         for relation in task.relations:
             typer.echo(f"  - {relation.type.value}: {relation.target_id}")
+    if task.waiting:
+        typer.echo("\nWaiting for")
+        typer.echo(f"  {task.waiting.target_kind}: {task.waiting.target}")
+        if task.waiting.request:
+            typer.echo(f"  Request: {task.waiting.request}")
+        if task.waiting.expected_on:
+            typer.echo(f"  Expected: {task.waiting.expected_on}")
+        if task.waiting.follow_up_on:
+            typer.echo(f"  Follow up: {task.waiting.follow_up_on}")
+        if task.waiting.escalation_on:
+            typer.echo(
+                f"  Escalate: {task.waiting.escalation_on}"
+                + (f" to {task.waiting.escalation_to}" if task.waiting.escalation_to else "")
+            )
+    if task.blockers:
+        typer.echo("\nBlockers")
+        for blocker in task.blockers:
+            marker = "resolved" if blocker.resolved_at else "open"
+            typer.echo(f"  - {blocker.id} [{marker}] {blocker.description}")
 
 
 @task_app.command("show")
@@ -298,6 +344,33 @@ def task_log(
     _emit(ctx, _service(ctx).log_work(task_id, minutes=minutes, note=note))
 
 
+@task_app.command("correct-work")
+def task_correct_work(
+    ctx: typer.Context,
+    task_id: Annotated[str, typer.Argument(help="Task ID or unique prefix.")],
+    work_log_id: Annotated[str, typer.Argument(help="Work log ID, such as WL-1.")],
+    minutes: Annotated[
+        float,
+        typer.Argument(min=0, help="Corrected effective minutes."),
+    ],
+    reason: Annotated[
+        str,
+        typer.Option(help="Why the original work-log value is being corrected."),
+    ],
+) -> None:
+    """Correct effective effort without rewriting the append-only original log."""
+
+    _emit(
+        ctx,
+        _service(ctx).correct_work_log(
+            task_id,
+            work_log_id,
+            corrected_minutes=minutes,
+            reason=reason,
+        ),
+    )
+
+
 @task_app.command("estimate")
 def task_estimate(
     ctx: typer.Context,
@@ -337,6 +410,208 @@ def task_repeat(
             until_on=until_on,
         ),
     )
+
+
+@task_app.command("delegate")
+def task_delegate(
+    ctx: typer.Context,
+    task_id: Annotated[str, typer.Argument(help="Task ID or unique prefix.")],
+    target: Annotated[str, typer.Argument(help="Person, team, or system now responsible.")],
+    request: Annotated[
+        str | None,
+        typer.Option(help="Concrete response or result requested."),
+    ] = None,
+    target_kind: Annotated[
+        str,
+        typer.Option("--target-kind", help="Kind of delegation target."),
+    ] = "person",
+    expected_on: Annotated[
+        str | None,
+        typer.Option("--expected", help="Expected response date (YYYY-MM-DD)."),
+    ] = None,
+    follow_up_on: Annotated[
+        str | None,
+        typer.Option("--follow-up", help="First follow-up date (YYYY-MM-DD)."),
+    ] = None,
+    escalation_on: Annotated[
+        str | None,
+        typer.Option("--escalation", help="Escalation date (YYYY-MM-DD)."),
+    ] = None,
+    escalation_to: Annotated[
+        str | None,
+        typer.Option("--escalate-to", help="Escalation target."),
+    ] = None,
+) -> None:
+    """Delegate an action and create a durable Waiting For episode."""
+
+    _emit(
+        ctx,
+        _service(ctx).delegate_task(
+            task_id,
+            target=target,
+            request=request,
+            target_kind=target_kind,
+            expected_on=expected_on,
+            follow_up_on=follow_up_on,
+            escalation_on=escalation_on,
+            escalation_to=escalation_to,
+        ),
+    )
+
+
+@task_app.command("follow-up")
+def task_follow_up(
+    ctx: typer.Context,
+    task_id: Annotated[str, typer.Argument(help="Waiting task ID or unique prefix.")],
+    note: Annotated[str, typer.Option(help="What was sent or attempted.")],
+    next_follow_up_on: Annotated[
+        str | None,
+        typer.Option("--next", help="Next follow-up date (YYYY-MM-DD)."),
+    ] = None,
+) -> None:
+    """Record a follow-up without resolving the Waiting For episode."""
+
+    _emit(
+        ctx,
+        _service(ctx).follow_up_waiting(
+            task_id,
+            note=note,
+            next_follow_up_on=next_follow_up_on,
+        ),
+    )
+
+
+@task_app.command("respond")
+def task_respond(
+    ctx: typer.Context,
+    task_id: Annotated[str, typer.Argument(help="Waiting task ID or unique prefix.")],
+    note: Annotated[str, typer.Option(help="Response received and its outcome.")],
+    resolved: Annotated[
+        bool,
+        typer.Option(
+            "--resolved/--still-waiting",
+            help="Resolve the episode or keep waiting (the safe default).",
+        ),
+    ] = False,
+    next_follow_up_on: Annotated[
+        str | None,
+        typer.Option("--next", help="Next follow-up date when still waiting."),
+    ] = None,
+) -> None:
+    """Record a response, explicitly deciding whether Waiting For is resolved."""
+
+    _emit(
+        ctx,
+        _service(ctx).record_waiting_response(
+            task_id,
+            note=note,
+            resolved=resolved,
+            next_follow_up_on=next_follow_up_on,
+        ),
+    )
+
+
+@task_app.command("escalate")
+def task_escalate(
+    ctx: typer.Context,
+    task_id: Annotated[str, typer.Argument(help="Waiting task ID or unique prefix.")],
+    note: Annotated[str, typer.Option(help="Why and how this was escalated.")],
+    escalation_to: Annotated[
+        str | None,
+        typer.Option("--to", help="Override the configured escalation target."),
+    ] = None,
+    next_escalation_on: Annotated[
+        str | None,
+        typer.Option("--next", help="Next escalation date (YYYY-MM-DD)."),
+    ] = None,
+) -> None:
+    """Escalate a Waiting For episode and retain its interaction history."""
+
+    _emit(
+        ctx,
+        _service(ctx).escalate_waiting(
+            task_id,
+            note=note,
+            escalation_to=escalation_to,
+            next_escalation_on=next_escalation_on,
+        ),
+    )
+
+
+@task_app.command("unblock")
+def task_unblock(
+    ctx: typer.Context,
+    task_id: Annotated[str, typer.Argument(help="Task ID or unique prefix.")],
+    blocker_id: Annotated[str, typer.Argument(help="Blocker ID, such as BLK-1.")],
+    note: Annotated[str, typer.Option(help="Evidence that this blocker was resolved.")],
+) -> None:
+    """Resolve one blocker while preserving other blocker and waiting facets."""
+
+    _emit(
+        ctx,
+        _service(ctx).resolve_blocker(task_id, blocker_id, note=note),
+    )
+
+
+@task_app.command("schedule")
+def task_schedule(
+    ctx: typer.Context,
+    task_id: Annotated[str, typer.Argument(help="Task ID or unique prefix.")],
+    scheduled_for: Annotated[
+        str,
+        typer.Argument(help="Hard calendar date/time in ISO 8601 form."),
+    ],
+) -> None:
+    """Put work on the calendar for a specific date and time."""
+
+    _emit(ctx, _service(ctx).schedule_task(task_id, scheduled_for=scheduled_for))
+
+
+@task_app.command("defer")
+def task_defer(
+    ctx: typer.Context,
+    task_id: Annotated[str, typer.Argument(help="Task ID or unique prefix.")],
+    not_before: Annotated[
+        str,
+        typer.Argument(help="Earliest eligible date/time in ISO 8601 form."),
+    ],
+) -> None:
+    """Hide an action from focus until a date without making it a calendar event."""
+
+    _emit(ctx, _service(ctx).defer_task(task_id, not_before=not_before))
+
+
+@task_app.command("due")
+def task_due(
+    ctx: typer.Context,
+    task_id: Annotated[str, typer.Argument(help="Task ID or unique prefix.")],
+    due_on: Annotated[
+        str | None,
+        typer.Argument(help="Commitment deadline (YYYY-MM-DD)."),
+    ] = None,
+    clear: Annotated[
+        bool,
+        typer.Option("--clear", help="Remove the current deadline."),
+    ] = False,
+) -> None:
+    """Set or explicitly clear a deadline without scheduling the task."""
+
+    if clear and due_on is not None:
+        raise typer.BadParameter("DATE and --clear are mutually exclusive", param_hint="DATE")
+    if due_on is None and not clear:
+        raise typer.BadParameter("DATE is required unless --clear is used", param_hint="DATE")
+    _emit(ctx, _service(ctx).set_task_due(task_id, due_on=None if clear else due_on))
+
+
+@task_app.command("reopen")
+def task_reopen(
+    ctx: typer.Context,
+    task_id: Annotated[str, typer.Argument(help="Completed task ID or unique prefix.")],
+    reason: Annotated[str, typer.Option(help="Why the completion decision changed.")],
+) -> None:
+    """Reopen completed work while retaining its completion snapshot."""
+
+    _emit(ctx, _service(ctx).reopen_task(task_id, reason=reason))
 
 
 @app.command("init")
@@ -622,6 +897,41 @@ def status(ctx: typer.Context) -> None:
         typer.echo(f"  {project.id}  {project.title}")
 
 
+@app.command("today")
+def today_dashboard(
+    ctx: typer.Context,
+    day: Annotated[
+        str | None,
+        typer.Option("--day", help="Dashboard date (YYYY-MM-DD); defaults to today."),
+    ] = None,
+) -> None:
+    """Show due, delegated, calendar, blocked, and available work in one view."""
+
+    report = _service(ctx).daily_dashboard(today=_iso_date(day, option="--day"))
+    if _state(ctx).json_output:
+        _emit(ctx, report)
+        return
+    typer.echo(f"Today: {report.day}")
+    if report.current_task:
+        typer.echo(f"Doing: {report.current_task.id}  {report.current_task.title}")
+    else:
+        typer.echo("Doing: none")
+    typer.echo(f"Inbox: {report.inbox_count}")
+    groups = (
+        ("Overdue", report.overdue),
+        ("Due today", report.due_today),
+        ("Follow-ups due", report.follow_ups_due),
+        ("Escalations due", report.escalations_due),
+        ("Scheduled today", report.scheduled_today),
+        ("Blocked", report.blocked),
+        ("Available actions", report.available_actions),
+    )
+    for heading, items in groups:
+        typer.echo(f"\n{heading} ({len(items)})")
+        for item in items:
+            typer.echo(f"  {item.id}  {item.title}")
+
+
 @app.command()
 def start(
     ctx: typer.Context,
@@ -701,6 +1011,8 @@ def project_done(
 
 
 def _show_review(report: ReviewReport) -> None:
+    if report.session_id:
+        typer.echo(f"Weekly review: {report.session_id} (in progress)")
     if report.current_task:
         typer.echo(f"Doing: {report.current_task.id}  {report.current_task.title}")
     groups = (
@@ -717,10 +1029,23 @@ def _show_review(report: ReviewReport) -> None:
             age = f", {item.age_days}d" if item.age_days is not None else ""
             typer.echo(f"  {item.id}  {item.title} — {item.reason}{age}")
     typer.echo(f"\nSomeday/Maybe ({report.someday_count})")
+    typer.echo("\nChecklist")
+    for item in report.checklist:
+        marker = "x" if item.complete else " "
+        typer.echo(f"  [{marker}] {item.key} — {item.label} ({item.count})")
     typer.echo(f"Attention items: {report.attention_count}")
 
 
-@app.command()
+def _show_review_session(session: WeeklyReviewSession) -> None:
+    state = "complete" if session.completed_at else "in progress"
+    typer.echo(f"Weekly review {session.id} ({state})")
+    typer.echo(f"Started: {session.started_at.isoformat()}")
+    for step in session.steps:
+        marker = "x" if step.checked_at else " "
+        typer.echo(f"  [{marker}] {step.step.value}")
+
+
+@review_app.callback(invoke_without_command=True)
 def review(
     ctx: typer.Context,
     complete: Annotated[
@@ -728,7 +1053,10 @@ def review(
         typer.Option("--complete", help="Record this weekly review as completed."),
     ] = False,
 ) -> None:
-    """Run the GTD weekly review checklist."""
+    """Show the review queues; use subcommands for a resumable review."""
+
+    if ctx.invoked_subcommand is not None:
+        return
 
     service = _service(ctx)
     report = service.record_review() if complete else service.weekly_review()
@@ -736,6 +1064,72 @@ def review(
         _emit(ctx, report)
     else:
         _show_review(report)
+
+
+@review_app.command("start")
+def review_start(ctx: typer.Context) -> None:
+    """Start a weekly review, or return the unfinished session."""
+
+    session = _service(ctx).start_weekly_review()
+    if _state(ctx).json_output:
+        _emit(ctx, session)
+    else:
+        _show_review_session(session)
+
+
+@review_app.command("resume")
+def review_resume(ctx: typer.Context) -> None:
+    """Resume the active review, starting one when none exists."""
+
+    service = _service(ctx)
+    report = service.weekly_review()
+    if report.session_id is None:
+        session = service.start_weekly_review()
+        report = service.weekly_review(review_id=session.id)
+    if _state(ctx).json_output:
+        _emit(ctx, report)
+    else:
+        _show_review(report)
+
+
+@review_app.command("check")
+def review_check(
+    ctx: typer.Context,
+    review_id: Annotated[str, typer.Argument(help="Review ID or unique prefix.")],
+    step: Annotated[
+        WeeklyReviewStep,
+        typer.Argument(case_sensitive=False, help="Checklist step to confirm."),
+    ],
+    undo: Annotated[
+        bool,
+        typer.Option("--undo", help="Mark this step unchecked again."),
+    ] = False,
+) -> None:
+    """Confirm one queue was consciously reviewed, regardless of its item count."""
+
+    session = _service(ctx).check_weekly_review_step(
+        review_id,
+        step,
+        checked=not undo,
+    )
+    if _state(ctx).json_output:
+        _emit(ctx, session)
+    else:
+        _show_review_session(session)
+
+
+@review_app.command("complete")
+def review_complete(
+    ctx: typer.Context,
+    review_id: Annotated[str, typer.Argument(help="Review ID or unique prefix.")],
+) -> None:
+    """Complete a review only after every required step is checked."""
+
+    session = _service(ctx).complete_weekly_review(review_id)
+    if _state(ctx).json_output:
+        _emit(ctx, session)
+    else:
+        _show_review_session(session)
 
 
 @app.command()

@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from datetime import date, datetime
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, FastAPI, Query, Request
 from fastapi.responses import JSONResponse
@@ -29,6 +29,7 @@ from work_smarter.gtd.models import (
     ClarifyResult,
     Commitment,
     CompletionResult,
+    DailyDashboard,
     Energy,
     GtdProject,
     Impact,
@@ -42,6 +43,8 @@ from work_smarter.gtd.models import (
     TaskRigor,
     Urgency,
     ValidationReport,
+    WeeklyReviewSession,
+    WeeklyReviewStep,
     WorkType,
 )
 from work_smarter.gtd.service import GtdService
@@ -132,6 +135,11 @@ class WorkLogRequest(ApiModel):
     note: str | None = None
 
 
+class WorkLogCorrectionRequest(ApiModel):
+    corrected_minutes: float = Field(ge=0)
+    reason: str = Field(min_length=1)
+
+
 class RemainingEstimateRequest(ApiModel):
     minutes: int = Field(ge=0)
     reason: str = Field(min_length=1)
@@ -166,6 +174,57 @@ class QuickAddRequest(ApiModel):
     urgency: Urgency | None = None
     impact: Impact | None = None
     commitment: Commitment | None = None
+
+
+class DelegateRequest(ApiModel):
+    target: str = Field(min_length=1)
+    request: str | None = None
+    target_kind: Literal["person", "external"] = "person"
+    expected_on: date | None = None
+    follow_up_on: date | None = None
+    escalation_on: date | None = None
+    escalation_to: str | None = None
+
+
+class FollowUpRequest(ApiModel):
+    note: str = Field(min_length=1)
+    next_follow_up_on: date | None = None
+
+
+class WaitingResponseRequest(ApiModel):
+    note: str = Field(min_length=1)
+    resolved: bool
+    next_follow_up_on: date | None = None
+
+
+class EscalateRequest(ApiModel):
+    note: str = Field(min_length=1)
+    escalation_to: str | None = None
+    next_escalation_on: date | None = None
+
+
+class ResolveBlockerRequest(ApiModel):
+    note: str = Field(min_length=1)
+
+
+class ScheduleRequest(ApiModel):
+    scheduled_for: datetime
+
+
+class DeferRequest(ApiModel):
+    not_before: datetime
+
+
+class DueRequest(ApiModel):
+    due_on: date | None
+
+
+class ReopenRequest(ApiModel):
+    reason: str = Field(min_length=1)
+
+
+class WeeklyReviewStepRequest(ApiModel):
+    checked: bool = True
 
 
 def create_gtd_router(service_dependency: Any) -> APIRouter:
@@ -276,6 +335,20 @@ def create_gtd_router(service_dependency: Any) -> APIRouter:
     ) -> Task:
         return service.log_work(task_id, minutes=payload.minutes, note=payload.note)
 
+    @router.post("/tasks/{task_id}/work-logs/{work_log_id}/correct")
+    def correct_work_log(
+        task_id: str,
+        work_log_id: str,
+        payload: WorkLogCorrectionRequest,
+        service: GtdService = service_dep,
+    ) -> Task:
+        return service.correct_work_log(
+            task_id,
+            work_log_id,
+            corrected_minutes=payload.corrected_minutes,
+            reason=payload.reason,
+        )
+
     @router.patch("/tasks/{task_id}/remaining-estimate")
     def set_remaining_estimate(
         task_id: str,
@@ -299,9 +372,104 @@ def create_gtd_router(service_dependency: Any) -> APIRouter:
             **payload.model_dump(exclude_none=True),
         )
 
+    @router.post("/tasks/{task_id}/delegate")
+    def delegate_task(
+        task_id: str,
+        payload: DelegateRequest,
+        service: GtdService = service_dep,
+    ) -> Task:
+        return service.delegate_task(
+            task_id,
+            **payload.model_dump(exclude_none=True),
+        )
+
+    @router.post("/tasks/{task_id}/follow-up")
+    def follow_up_waiting(
+        task_id: str,
+        payload: FollowUpRequest,
+        service: GtdService = service_dep,
+    ) -> Task:
+        return service.follow_up_waiting(
+            task_id,
+            note=payload.note,
+            next_follow_up_on=payload.next_follow_up_on,
+        )
+
+    @router.post("/tasks/{task_id}/response")
+    def record_waiting_response(
+        task_id: str,
+        payload: WaitingResponseRequest,
+        service: GtdService = service_dep,
+    ) -> Task:
+        return service.record_waiting_response(
+            task_id,
+            note=payload.note,
+            resolved=payload.resolved,
+            next_follow_up_on=payload.next_follow_up_on,
+        )
+
+    @router.post("/tasks/{task_id}/escalate")
+    def escalate_waiting(
+        task_id: str,
+        payload: EscalateRequest,
+        service: GtdService = service_dep,
+    ) -> Task:
+        return service.escalate_waiting(
+            task_id,
+            **payload.model_dump(exclude_none=True),
+        )
+
+    @router.post("/tasks/{task_id}/blockers/{blocker_id}/resolve")
+    def resolve_blocker(
+        task_id: str,
+        blocker_id: str,
+        payload: ResolveBlockerRequest,
+        service: GtdService = service_dep,
+    ) -> Task:
+        return service.resolve_blocker(task_id, blocker_id, note=payload.note)
+
+    @router.put("/tasks/{task_id}/schedule")
+    def schedule_task(
+        task_id: str,
+        payload: ScheduleRequest,
+        service: GtdService = service_dep,
+    ) -> Task:
+        return service.schedule_task(task_id, scheduled_for=payload.scheduled_for)
+
+    @router.put("/tasks/{task_id}/defer")
+    def defer_task(
+        task_id: str,
+        payload: DeferRequest,
+        service: GtdService = service_dep,
+    ) -> Task:
+        return service.defer_task(task_id, not_before=payload.not_before)
+
+    @router.put("/tasks/{task_id}/due")
+    def set_task_due(
+        task_id: str,
+        payload: DueRequest,
+        service: GtdService = service_dep,
+    ) -> Task:
+        return service.set_task_due(task_id, due_on=payload.due_on)
+
+    @router.post("/tasks/{task_id}/reopen")
+    def reopen_task(
+        task_id: str,
+        payload: ReopenRequest,
+        service: GtdService = service_dep,
+    ) -> Task:
+        return service.reopen_task(task_id, reason=payload.reason)
+
     @router.get("/status")
     def status(service: GtdService = service_dep) -> StatusReport:
         return service.status()
+
+    @router.get("/dashboard/today")
+    def daily_dashboard(
+        day: Annotated[date | None, Query()] = None,
+        service: GtdService = service_dep,
+    ) -> DailyDashboard:
+        return service.daily_dashboard(today=day)
 
     @router.get("/focus")
     def focus(
@@ -375,6 +543,32 @@ def create_gtd_router(service_dependency: Any) -> APIRouter:
     @router.post("/review/weekly/complete")
     def complete_review(service: GtdService = service_dep) -> ReviewReport:
         return service.record_review()
+
+    @router.post("/review/weekly/start", status_code=201)
+    def start_weekly_review(
+        service: GtdService = service_dep,
+    ) -> WeeklyReviewSession:
+        return service.start_weekly_review()
+
+    @router.put("/review/weekly/{review_id}/steps/{step}")
+    def check_weekly_review_step(
+        review_id: str,
+        step: WeeklyReviewStep,
+        payload: WeeklyReviewStepRequest,
+        service: GtdService = service_dep,
+    ) -> WeeklyReviewSession:
+        return service.check_weekly_review_step(
+            review_id,
+            step,
+            checked=payload.checked,
+        )
+
+    @router.post("/review/weekly/{review_id}/complete")
+    def complete_weekly_review(
+        review_id: str,
+        service: GtdService = service_dep,
+    ) -> WeeklyReviewSession:
+        return service.complete_weekly_review(review_id)
 
     @router.get("/doctor")
     def doctor(service: GtdService = service_dep) -> ValidationReport:
