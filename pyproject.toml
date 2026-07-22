@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "work-smarter"
+version = "0.1.0"
+description = "A text-first, local-first GTD system for engineers."
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [
+  { name = "hattori-sat" },
+]
+dependencies = [
+  "fastapi>=0.116,<1",
+  "pydantic>=2.9,<3",
+  "PyYAML>=6.0,<7",
+  "typer>=0.16,<1",
+  "uvicorn>=0.35,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "httpx>=0.28,<1",
+  "pytest>=8.4,<10",
+  "pytest-cov>=6,<8",
+  "ruff>=0.12,<1",
+]
+
+[project.scripts]
+ws = "work_smarter.cli:run"
+
+[project.entry-points."work_smarter.features"]
+gtd = "work_smarter.gtd:GtdFeature"
+project-management = "work_smarter.project_management:ProjectManagementFeature"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
