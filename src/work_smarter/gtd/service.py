@@ -22,6 +22,7 @@ from work_smarter.gtd.models import (
     Assumption,
     ClarifyDecision,
     ClarifyResult,
+    Commitment,
     CompletionCondition,
     CompletionDefinition,
     CompletionResult,
@@ -29,10 +30,13 @@ from work_smarter.gtd.models import (
     EntityRef,
     ExecutionState,
     GtdProject,
+    Impact,
     InboxItem,
     InboxPreview,
     MetricsReport,
     ProjectStatus,
+    RecurrenceFrequency,
+    RecurrenceRule,
     Reference,
     RelationType,
     ReviewItem,
@@ -49,9 +53,12 @@ from work_smarter.gtd.models import (
     TaskRigor,
     TaskSchedule,
     TaskStatus,
+    Urgency,
     ValidationIssue,
     ValidationReport,
     WaitingDetail,
+    WorkLog,
+    WorkLogSource,
     WorkType,
     utc_now,
 )
@@ -68,6 +75,13 @@ OPEN_TASK_STATUSES = {
 }
 
 ENERGY_RANK = {Energy.LOW: 1, Energy.MEDIUM: 2, Energy.HIGH: 3}
+URGENCY_RANK = {Urgency.LOW: 1, Urgency.NORMAL: 2, Urgency.HIGH: 3, Urgency.CRITICAL: 4}
+IMPACT_RANK = {Impact.LOW: 1, Impact.MEDIUM: 2, Impact.HIGH: 3}
+COMMITMENT_RANK = {
+    Commitment.NONE: 1,
+    Commitment.INTENDED: 2,
+    Commitment.COMMITTED: 3,
+}
 
 
 def _new_id(prefix: str) -> str:
@@ -227,6 +241,14 @@ class GtdService:
                     f"Cannot add an action to {project.id} while it is {project.status.value}"
                 )
             fields = {**fields, "project_id": project.id}
+        requested_parent = fields.get("parent_id")
+        if requested_parent is not None:
+            if choice not in task_choices:
+                raise InvalidTransitionError(
+                    f"parent_id does not apply to the {choice.value} disposition"
+                )
+            parent = self._task_record(str(requested_parent)).entity
+            fields = {**fields, "parent_id": parent.id}
         title = str(fields.get("title") or item.title).strip()
         tags = _normalize_tags(fields.get("tags") or item.tags)
         now = utc_now()
@@ -460,6 +482,9 @@ class GtdService:
             goal=fields.get("goal"),
             why=fields.get("why"),
             desired_outcome=fields.get("desired_outcome"),
+            urgency=fields.get("urgency") or Urgency.NORMAL,
+            impact=fields.get("impact") or Impact.MEDIUM,
+            commitment=fields.get("commitment") or Commitment.NONE,
             lifecycle=lifecycle,
             disposition=disposition,
             execution=execution,
@@ -484,6 +509,9 @@ class GtdService:
                 obvious=rigor is TaskRigor.QUICK,
                 conditions=conditions,
             ),
+            recurrence=fields.get("recurrence"),
+            recurrence_series_id=fields.get("recurrence_series_id"),
+            occurrence_on=fields.get("occurrence_on"),
             resolution=resolution,
             completed_at=completed_at,
             tags=tags,
@@ -535,6 +563,9 @@ class GtdService:
         *,
         work_type: WorkType | str | None = None,
         rigor: TaskRigor | str | None = None,
+        urgency: Urgency | str | None = None,
+        impact: Impact | str | None = None,
+        commitment: Commitment | str | None = None,
         goal: str | None = None,
         why: str | None = None,
         desired_outcome: str | None = None,
@@ -542,6 +573,8 @@ class GtdService:
         assumptions: Iterable[str] | None = None,
         risks: Iterable[str] | None = None,
         completion_criteria: Iterable[str] | None = None,
+        original_estimate_minutes: int | None = None,
+        remaining_estimate_minutes: int | None = None,
     ) -> Task:
         """Define rigor fields together so validation never sees a partial ticket."""
 
@@ -552,6 +585,9 @@ class GtdService:
             for key, value in {
                 "work_type": work_type,
                 "rigor": rigor,
+                "urgency": urgency,
+                "impact": impact,
+                "commitment": commitment,
                 "goal": goal.strip() if goal else None,
                 "why": why.strip() if why else None,
                 "desired_outcome": desired_outcome.strip() if desired_outcome else None,
@@ -568,6 +604,13 @@ class GtdService:
                     for index, value in enumerate(assumptions, start=1)
                     if value.strip()
                 ]
+            if (constraints is not None or assumptions is not None) and completion_criteria is None:
+                updates["completion"] = task.completion.model_copy(
+                    update={
+                        "assurance_reviewed_at": None,
+                        "assurance_review_hash": None,
+                    }
+                ).model_dump(mode="json", exclude_none=True)
             if completion_criteria is not None:
                 conditions = [
                     CompletionCondition(id=f"CC-{index}", text=value.strip())
@@ -578,12 +621,224 @@ class GtdService:
                     obvious=not conditions,
                     conditions=conditions,
                 ).model_dump(mode="json", exclude_none=True)
+            if original_estimate_minutes is not None:
+                if (
+                    task.original_estimate_minutes is not None
+                    and task.original_estimate_minutes != original_estimate_minutes
+                ):
+                    raise InvalidTransitionError(
+                        "original_estimate_minutes is immutable once recorded"
+                    )
+                updates["original_estimate_minutes"] = original_estimate_minutes
+                if task.remaining_estimate_minutes is None and remaining_estimate_minutes is None:
+                    updates["remaining_estimate_minutes"] = original_estimate_minutes
+            if remaining_estimate_minutes is not None:
+                if (
+                    task.remaining_estimate_minutes is not None
+                    and task.remaining_estimate_minutes != remaining_estimate_minutes
+                ):
+                    raise InvalidTransitionError(
+                        "Use set_remaining_estimate with a reason to revise remaining work"
+                    )
+                updates["remaining_estimate_minutes"] = remaining_estimate_minutes
             updated = self._evolve_task(task, **updates)
             self._write_task(record, updated)
             self._event(
                 EventType.TASK_DEFINED,
                 entity_id=updated.id,
                 payload={"fields": sorted(updates)},
+            )
+            return updated
+
+    def set_task_parent(self, task_id: str, parent_id: str | None) -> Task:
+        """Set decomposition hierarchy independently from dependency links."""
+
+        with self.workspace.lock():
+            record = self._task_record(task_id)
+            task = record.entity
+            canonical_parent_id: str | None = None
+            if parent_id is not None:
+                parent = self._task_record(parent_id).entity
+                canonical_parent_id = parent.id
+                if parent.id == task.id:
+                    raise InvalidTransitionError("A task cannot be its own parent")
+                cursor = parent
+                visited: set[str] = set()
+                while True:
+                    if cursor.id == task.id:
+                        raise InvalidTransitionError(
+                            f"Setting {parent.id} as parent of {task.id} creates a parent cycle"
+                        )
+                    if cursor.id in visited or cursor.parent_id is None:
+                        break
+                    visited.add(cursor.id)
+                    cursor = self._task_record(cursor.parent_id).entity
+            if task.parent_id == canonical_parent_id:
+                return task
+            updated = self._evolve_task(task, parent_id=canonical_parent_id)
+            self._write_task(record, updated)
+            self._event(
+                EventType.TASK_PARENT_SET,
+                entity_id=task.id,
+                payload={"parent_id": canonical_parent_id},
+            )
+            return updated
+
+    def log_work(
+        self,
+        task_id: str,
+        *,
+        minutes: float,
+        note: str | None = None,
+        source: WorkLogSource | str = WorkLogSource.MANUAL,
+        started_at: datetime | None = None,
+        stopped_at: datetime | None = None,
+    ) -> Task:
+        """Append actual effort without mutating the original estimate."""
+
+        with self.workspace.lock():
+            record = self._task_record(task_id)
+            task = record.entity
+            return self._append_work_log(
+                record,
+                task,
+                minutes=minutes,
+                note=note,
+                source=source,
+                started_at=started_at,
+                stopped_at=stopped_at,
+            )
+
+    def _append_work_log(
+        self,
+        record: EntityRecord[Task],
+        task: Task,
+        *,
+        minutes: float,
+        note: str | None,
+        source: WorkLogSource | str,
+        started_at: datetime | None = None,
+        stopped_at: datetime | None = None,
+        extra_updates: dict[str, Any] | None = None,
+    ) -> Task:
+        if minutes <= 0:
+            raise InvalidTransitionError("Work log minutes must be greater than zero")
+        existing_logs = self._logs_with_legacy_actual(task)
+        log = WorkLog(
+            id=f"WL-{len(existing_logs) + 1}",
+            minutes=max(round(minutes, 6), 0.000001),
+            source=source,
+            note=note.strip() if note else None,
+            started_at=started_at,
+            stopped_at=stopped_at,
+        )
+        remaining = task.remaining_estimate_minutes
+        if remaining is not None:
+            remaining = max(0, round(remaining - log.minutes, 2))
+        updates: dict[str, Any] = {
+            "actual_minutes": round(
+                sum(item.minutes for item in [*existing_logs, log]),
+                2,
+            ),
+            "remaining_estimate_minutes": remaining,
+            "work_logs": [
+                *(item.model_dump(mode="json", exclude_none=True) for item in existing_logs),
+                log.model_dump(mode="json", exclude_none=True),
+            ],
+        }
+        updates.update(extra_updates or {})
+        updated = self._evolve_task(task, **updates)
+        self._write_task(record, updated)
+        self._event(
+            EventType.TASK_WORK_LOGGED,
+            entity_id=task.id,
+            payload={
+                "work_log_id": log.id,
+                "minutes": log.minutes,
+                "source": log.source.value,
+                "note": log.note,
+            },
+        )
+        return updated
+
+    @staticmethod
+    def _logs_with_legacy_actual(task: Task) -> list[WorkLog]:
+        logs = list(task.work_logs)
+        if not logs and task.actual_minutes > 0:
+            logs.append(
+                WorkLog(
+                    id="WL-LEGACY",
+                    minutes=task.actual_minutes,
+                    source=WorkLogSource.MIGRATED,
+                    note="Migrated from legacy actual_minutes projection",
+                    recorded_at=task.updated_at,
+                )
+            )
+        return logs
+
+    def set_remaining_estimate(
+        self,
+        task_id: str,
+        *,
+        minutes: int,
+        reason: str,
+    ) -> Task:
+        if minutes < 0:
+            raise InvalidTransitionError("Remaining estimate cannot be negative")
+        if not reason.strip():
+            raise InvalidTransitionError("Changing remaining estimate requires a reason")
+        with self.workspace.lock():
+            record = self._task_record(task_id)
+            task = record.entity
+            if task.lifecycle is not TaskLifecycle.OPEN:
+                raise InvalidTransitionError(
+                    f"Cannot revise remaining estimate on a {task.lifecycle.value} task"
+                )
+            previous = task.remaining_estimate_minutes
+            updated = self._evolve_task(task, remaining_estimate_minutes=minutes)
+            self._write_task(record, updated)
+            self._event(
+                EventType.TASK_ESTIMATE_UPDATED,
+                entity_id=task.id,
+                payload={
+                    "field": "remaining_estimate_minutes",
+                    "from": previous,
+                    "to": minutes,
+                    "reason": reason.strip(),
+                },
+            )
+            return updated
+
+    def set_recurrence(
+        self,
+        task_id: str,
+        *,
+        frequency: RecurrenceFrequency | str,
+        interval: int = 1,
+        anchor_on: date | str | None = None,
+        until_on: date | str | None = None,
+    ) -> Task:
+        with self.workspace.lock():
+            record = self._task_record(task_id)
+            task = record.entity
+            anchor = anchor_on or task.occurrence_on or utc_now().date()
+            rule = RecurrenceRule(
+                frequency=frequency,
+                interval=interval,
+                anchor_on=anchor,
+                until_on=until_on,
+            )
+            updated = self._evolve_task(
+                task,
+                recurrence=rule.model_dump(mode="json", exclude_none=True),
+                recurrence_series_id=task.recurrence_series_id or task.id,
+                occurrence_on=rule.anchor_on,
+            )
+            self._write_task(record, updated)
+            self._event(
+                EventType.TASK_RECURRENCE_SET,
+                entity_id=task.id,
+                payload=rule.model_dump(mode="json", exclude_none=True),
             )
             return updated
 
@@ -624,6 +879,39 @@ class GtdService:
             )
             return updated
 
+    def review_task_assurance(self, task_id: str) -> Task:
+        """Record that constraints and assumptions were explicitly reviewed."""
+
+        with self.workspace.lock():
+            record = self._task_record(task_id)
+            task = record.entity
+            if task.rigor is not TaskRigor.ASSURED:
+                raise InvalidTransitionError(
+                    f"Task {task.id} is {task.rigor.value}; assurance review is not required"
+                )
+            reviewed_at = utc_now()
+            completion = task.completion.model_copy(
+                update={
+                    "assurance_reviewed_at": reviewed_at,
+                    "assurance_review_hash": task.assurance_input_hash(),
+                }
+            )
+            updated = self._evolve_task(
+                task,
+                completion=completion.model_dump(mode="json", exclude_none=True),
+            )
+            self._write_task(record, updated)
+            self._event(
+                EventType.TASK_ASSURANCE_REVIEWED,
+                entity_id=task.id,
+                payload={
+                    "reviewed_at": reviewed_at.isoformat(),
+                    "constraint_count": len(task.constraints),
+                    "assumption_count": len(task.assumptions),
+                },
+            )
+            return updated
+
     def link_tasks(
         self,
         source_id: str,
@@ -640,9 +928,15 @@ class GtdService:
                 raise InvalidTransitionError("A task relation cannot target itself")
             if relation in source.relations:
                 return source
-            if relation.type is RelationType.BLOCKS and self._has_blocks_path(target.id, source.id):
+            if relation.type is RelationType.BLOCKS:
+                creates_cycle = self._has_dependency_path(target.id, source.id)
+            elif relation.type is RelationType.DEPENDS_ON:
+                creates_cycle = self._has_dependency_path(source.id, target.id)
+            else:
+                creates_cycle = False
+            if creates_cycle:
                 raise InvalidTransitionError(
-                    f"blocks relation {source.id} -> {target.id} creates a cycle"
+                    f"{relation.type.value} relation {source.id} -> {target.id} creates a cycle"
                 )
             relations = [*source.relations, relation]
             updated = self._evolve_task(
@@ -657,15 +951,18 @@ class GtdService:
             )
             return updated
 
-    def _has_blocks_path(self, start_id: str, goal_id: str) -> bool:
-        graph = {
-            task.id: [
-                relation.target_id
-                for relation in task.relations
-                if relation.type is RelationType.BLOCKS
-            ]
-            for task in self.list_tasks()
-        }
+    def _dependency_graph(self) -> dict[str, list[str]]:
+        graph: dict[str, list[str]] = {task.id: [] for task in self.list_tasks()}
+        for task in self.list_tasks():
+            for relation in task.relations:
+                if relation.type is RelationType.BLOCKS:
+                    graph[task.id].append(relation.target_id)
+                elif relation.type is RelationType.DEPENDS_ON:
+                    graph.setdefault(relation.target_id, []).append(task.id)
+        return graph
+
+    def _has_dependency_path(self, start_id: str, goal_id: str) -> bool:
+        graph = self._dependency_graph()
         pending = [start_id]
         visited: set[str] = set()
         while pending:
@@ -678,14 +975,32 @@ class GtdService:
             pending.extend(graph.get(current, []))
         return False
 
-    def _unfinished_predecessors(self, task_id: str) -> list[Task]:
+    def _unfinished_predecessors(self, task_id: str, *, strict: bool = True) -> list[Task]:
+        current = self._task_record(task_id).entity
+        depends_on = {
+            relation.target_id
+            for relation in current.relations
+            if relation.type is RelationType.DEPENDS_ON
+        }
+        tasks = self.list_tasks()
+        known_ids = {task.id for task in tasks}
+        missing = sorted(depends_on - known_ids)
+        if missing:
+            if strict:
+                raise InvalidTransitionError(
+                    f"{current.id} depends on missing tasks: {', '.join(missing)}"
+                )
+            return [current]
         return [
             task
-            for task in self.list_tasks()
-            if task.status not in {TaskStatus.DONE, TaskStatus.CANCELLED}
-            and any(
-                relation.type is RelationType.BLOCKS and relation.target_id == task_id
-                for relation in task.relations
+            for task in tasks
+            if task.status is not TaskStatus.DONE
+            and (
+                task.id in depends_on
+                or any(
+                    relation.type is RelationType.BLOCKS and relation.target_id == task_id
+                    for relation in task.relations
+                )
             )
         ]
 
@@ -734,15 +1049,20 @@ class GtdService:
             )
             if task.status is not TaskStatus.NEXT and not is_ready_scheduled:
                 continue
+            if self._unfinished_predecessors(task.id, strict=False):
+                continue
+            if task.occurrence_on is not None and task.occurrence_on > now.date():
+                continue
             if task.not_before is not None and _ensure_aware(task.not_before) > now:
                 continue
             if requested_contexts and not requested_contexts.intersection(task.contexts):
                 continue
-            if (
-                available_minutes is not None
-                and task.estimate_minutes is not None
-                and task.estimate_minutes > available_minutes
-            ):
+            effort = (
+                task.remaining_estimate_minutes
+                if task.remaining_estimate_minutes is not None
+                else task.estimate_minutes
+            )
+            if available_minutes is not None and effort is not None and effort > available_minutes:
                 continue
             if (
                 available_energy is not None
@@ -755,6 +1075,9 @@ class GtdService:
         return sorted(
             candidates,
             key=lambda task: (
+                -URGENCY_RANK[task.urgency],
+                -COMMITMENT_RANK[task.commitment],
+                -IMPACT_RANK[task.impact],
                 task.due_on is None,
                 task.due_on or date.max,
                 task.created_at,
@@ -851,16 +1174,31 @@ class GtdService:
             raise InvalidTransitionError(f"{task.id} is not doing")
         now = utc_now()
         duration_seconds = max(0.0, (now - _ensure_aware(task.started_at)).total_seconds())
-        updated = self._evolve_task(
-            task,
-            execution=TaskExecution().model_dump(mode="json"),
-            actual_minutes=round(task.actual_minutes + duration_seconds / 60, 2),
-        )
-        self._write_task(record, updated)
+        if duration_seconds > 0:
+            updated = self._append_work_log(
+                record,
+                task,
+                minutes=duration_seconds / 60,
+                note=None,
+                source=WorkLogSource.TIMER,
+                started_at=task.started_at,
+                stopped_at=now,
+                extra_updates={"execution": TaskExecution().model_dump(mode="json")},
+            )
+        else:
+            updated = self._evolve_task(
+                task,
+                execution=TaskExecution().model_dump(mode="json"),
+            )
+            self._write_task(record, updated)
         self._event(
             EventType.TASK_STOPPED,
             entity_id=task.id,
-            payload={"duration_seconds": duration_seconds, "next_status": updated.status.value},
+            payload={
+                "duration_seconds": duration_seconds,
+                "next_status": updated.status.value,
+                "work_log_id": updated.work_logs[-1].id if duration_seconds > 0 else None,
+            },
         )
         return updated
 
@@ -882,13 +1220,19 @@ class GtdService:
         record = self._task_record(task_id)
         task = record.entity
         if task.status is TaskStatus.DONE:
+            next_occurrence = self._create_next_occurrence(record, task)
             return CompletionResult(
                 task=task,
                 project_attention_required=self._project_needs_action(task.project_id),
                 project_id=task.project_id,
+                next_occurrence=next_occurrence,
             )
         if task.status is TaskStatus.CANCELLED:
             raise InvalidTransitionError(f"Cancelled task {task.id} cannot be completed")
+        if waiver_reason is not None:
+            waiver_reason = waiver_reason.strip()
+            if not waiver_reason:
+                raise InvalidTransitionError("Completion waiver reason cannot be blank")
 
         unmet = [condition for condition in task.completion.conditions if condition.met_at is None]
         missing_evidence = [
@@ -904,20 +1248,47 @@ class GtdService:
             raise InvalidTransitionError(
                 f"Task {task.id} completion conditions need evidence: {ids}"
             )
+        if (
+            task.rigor is TaskRigor.ASSURED
+            and task.completion.assurance_reviewed_at is None
+            and not waiver_reason
+        ):
+            raise InvalidTransitionError(
+                f"Task {task.id} constraints and assumptions need assurance review"
+            )
+        if (
+            task.rigor is TaskRigor.ASSURED
+            and task.completion.assurance_reviewed_at is not None
+            and task.completion.assurance_review_hash != task.assurance_input_hash()
+            and not waiver_reason
+        ):
+            raise InvalidTransitionError(
+                f"Task {task.id} assurance review is stale after constraints or assumptions changed"
+            )
 
         now = utc_now()
         actual_minutes = task.actual_minutes
+        remaining_estimate = task.remaining_estimate_minutes
+        work_logs = self._logs_with_legacy_actual(task)
+        timer_log: WorkLog | None = None
+        duration_seconds = 0.0
         if task.status is TaskStatus.DOING and task.started_at is not None:
             duration_seconds = max(
                 0.0,
                 (now - _ensure_aware(task.started_at)).total_seconds(),
             )
-            actual_minutes = round(task.actual_minutes + duration_seconds / 60, 2)
-            self._event(
-                EventType.TASK_STOPPED,
-                entity_id=task.id,
-                payload={"duration_seconds": duration_seconds, "next_status": "done"},
+            timer_minutes = max(round(duration_seconds / 60, 6), 0.000001)
+            timer_log = WorkLog(
+                id=f"WL-{len(work_logs) + 1}",
+                minutes=timer_minutes,
+                source=WorkLogSource.TIMER,
+                started_at=task.started_at,
+                stopped_at=now,
             )
+            work_logs.append(timer_log)
+            actual_minutes = round(sum(item.minutes for item in work_logs), 2)
+            if remaining_estimate is not None:
+                remaining_estimate = max(0, round(remaining_estimate - timer_minutes, 2))
         completion = task.completion.model_copy(
             update={"waiver_reason": waiver_reason or task.completion.waiver_reason}
         )
@@ -926,22 +1297,133 @@ class GtdService:
             lifecycle=TaskLifecycle.COMPLETED,
             execution=TaskExecution().model_dump(mode="json"),
             actual_minutes=actual_minutes,
+            remaining_estimate_minutes=(0 if remaining_estimate is not None else None),
+            work_logs=[item.model_dump(mode="json", exclude_none=True) for item in work_logs],
             completed_at=now,
             resolution=TaskResolution.COMPLETED,
             completion=completion.model_dump(mode="json", exclude_none=True),
         )
         self._write_task(record, updated)
+        if timer_log is not None:
+            self._event(
+                EventType.TASK_WORK_LOGGED,
+                entity_id=task.id,
+                payload={
+                    "work_log_id": timer_log.id,
+                    "minutes": timer_log.minutes,
+                    "source": timer_log.source.value,
+                },
+            )
+            self._event(
+                EventType.TASK_STOPPED,
+                entity_id=task.id,
+                payload={
+                    "duration_seconds": duration_seconds,
+                    "next_status": "done",
+                    "work_log_id": timer_log.id,
+                },
+            )
         self._event(
             EventType.TASK_COMPLETED,
             entity_id=updated.id,
             payload={"waiver_reason": waiver_reason},
         )
+        next_occurrence = self._create_next_occurrence(record, updated)
         needs_action = self._project_needs_action(updated.project_id)
         return CompletionResult(
             task=updated,
             project_attention_required=needs_action,
             project_id=updated.project_id,
+            next_occurrence=next_occurrence,
         )
+
+    def _create_next_occurrence(
+        self,
+        completed_record: EntityRecord[Task],
+        completed: Task,
+    ) -> Task | None:
+        next_on = completed.next_occurrence_on
+        if completed.recurrence is None or next_on is None:
+            return None
+        series_id = completed.recurrence_series_id or completed.id
+        existing = next(
+            (
+                task
+                for task in self.list_tasks()
+                if task.id != completed.id
+                and task.recurrence_series_id == series_id
+                and task.occurrence_on == next_on
+            ),
+            None,
+        )
+        if existing is not None:
+            return existing
+        now = utc_now()
+        completion = CompletionDefinition(
+            obvious=completed.completion.obvious,
+            conditions=[
+                CompletionCondition(id=item.id, text=item.text)
+                for item in completed.completion.conditions
+            ],
+        )
+        data = completed.persistent_dict()
+        data.update(
+            {
+                "id": _new_id("TASK"),
+                "revision": 1,
+                "lifecycle": TaskLifecycle.OPEN,
+                "disposition": TaskDisposition.NEXT,
+                "execution": TaskExecution().model_dump(mode="json"),
+                "created_at": now,
+                "updated_at": now,
+                "relations": [],
+                "remaining_estimate_minutes": completed.original_estimate_minutes,
+                "actual_minutes": 0,
+                "work_logs": [],
+                "schedule": TaskSchedule().model_dump(mode="json"),
+                "waiting": None,
+                "blockers": [],
+                "completion": completion.model_dump(mode="json", exclude_none=True),
+                "resolution": None,
+                "result_summary": None,
+                "evidence_links": [],
+                "completed_at": None,
+                "recurrence_series_id": series_id,
+                "occurrence_on": next_on,
+            }
+        )
+        next_task = Task.model_validate(data)
+        self.workspace.write(
+            next_task,
+            self._task_body(self._recurring_intent(completed_record.body, completed.title)),
+        )
+        self._event(
+            EventType.TASK_RECURRENCE_CREATED,
+            entity_id=next_task.id,
+            payload={
+                "series_id": next_task.recurrence_series_id,
+                "previous_task_id": completed.id,
+                "occurrence_on": next_on.isoformat(),
+            },
+        )
+        return next_task
+
+    @staticmethod
+    def _recurring_intent(body: str, fallback: str) -> str:
+        """Carry instructions forward without leaking notes or completion evidence."""
+
+        lines = body.splitlines()
+        try:
+            start = lines.index("## Intent") + 1
+        except ValueError:
+            return fallback
+        intent: list[str] = []
+        for line in lines[start:]:
+            if line.startswith("## "):
+                break
+            intent.append(line)
+        rendered = "\n".join(intent).strip()
+        return rendered or fallback
 
     def block_task(self, task_id: str, reason: str) -> Task:
         with self.workspace.lock():
@@ -986,18 +1468,28 @@ class GtdService:
                 )
             previous_status = task.status
             resolved_at = utc_now()
-            blockers = [
-                blocker.model_copy(update={"resolved_at": blocker.resolved_at or resolved_at})
-                for blocker in task.blockers
-            ]
-            schedule = task.schedule.model_copy(update={"scheduled_for": None})
-            updated = self._evolve_task(
-                task,
-                disposition=TaskDisposition.NEXT,
-                waiting=None,
-                blockers=[blocker.model_dump(mode="json") for blocker in blockers],
-                schedule=schedule.model_dump(mode="json", exclude_none=True),
-            )
+            if previous_status is TaskStatus.BLOCKED:
+                blockers = [
+                    blocker.model_copy(update={"resolved_at": blocker.resolved_at or resolved_at})
+                    for blocker in task.blockers
+                ]
+                updated = self._evolve_task(
+                    task,
+                    blockers=[blocker.model_dump(mode="json") for blocker in blockers],
+                )
+            elif previous_status is TaskStatus.WAITING:
+                updated = self._evolve_task(
+                    task,
+                    disposition=TaskDisposition.NEXT,
+                    waiting=None,
+                )
+            else:
+                schedule = task.schedule.model_copy(update={"scheduled_for": None})
+                updated = self._evolve_task(
+                    task,
+                    disposition=TaskDisposition.NEXT,
+                    schedule=schedule.model_dump(mode="json", exclude_none=True),
+                )
             self._write_task(record, updated)
             self._event(
                 EventType.TASK_READY,
@@ -1068,7 +1560,7 @@ class GtdService:
                 age_days=_age_days(task.updated_at, now),
             )
             for task in tasks
-            if task.status is TaskStatus.WAITING
+            if task.lifecycle is TaskLifecycle.OPEN and task.disposition is TaskDisposition.WAITING
         ]
         blocked = [
             ReviewItem(
@@ -1109,7 +1601,7 @@ class GtdService:
                 age_days=None,
             )
             for task in tasks
-            if task.status is TaskStatus.SCHEDULED
+            if task.lifecycle is TaskLifecycle.OPEN and task.disposition is TaskDisposition.CALENDAR
         ]
         current = self.current_task()
         current_ref = None
@@ -1182,6 +1674,7 @@ class GtdService:
                     seen_ids[entity.id] = self.workspace.relative(path)
 
         tasks = [record.entity for record in records if isinstance(record.entity, Task)]
+        task_by_id = {task.id: task for task in tasks}
         projects = {
             record.entity.id: record.entity
             for record in records
@@ -1197,6 +1690,7 @@ class GtdService:
                 )
             )
         for task in tasks:
+            task_path = self.workspace.relative(self.workspace.path_for(task))
             if task.project_id and task.project_id not in projects:
                 issues.append(
                     ValidationIssue(
@@ -1204,9 +1698,135 @@ class GtdService:
                         code="missing_project",
                         message=f"Task references missing project {task.project_id}",
                         entity_id=task.id,
-                        path=self.workspace.relative(self.workspace.path_for(task)),
+                        path=task_path,
                     )
                 )
+            if task.parent_id and task.parent_id not in task_by_id:
+                issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        code="missing_task_parent",
+                        message=f"Task references missing parent {task.parent_id}",
+                        entity_id=task.id,
+                        path=task_path,
+                    )
+                )
+            elif task.parent_id:
+                cursor = task
+                ancestors: set[str] = set()
+                while cursor.parent_id and cursor.parent_id in task_by_id:
+                    if cursor.parent_id == task.id or cursor.parent_id in ancestors:
+                        issues.append(
+                            ValidationIssue(
+                                severity="error",
+                                code="task_parent_cycle",
+                                message=f"Task parent hierarchy containing {task.id} is cyclic",
+                                entity_id=task.id,
+                                path=task_path,
+                            )
+                        )
+                        break
+                    ancestors.add(cursor.parent_id)
+                    cursor = task_by_id[cursor.parent_id]
+            for relation in task.relations:
+                if relation.target_id == task.id:
+                    issues.append(
+                        ValidationIssue(
+                            severity="error",
+                            code="self_task_relation",
+                            message=f"Task has a self relation of type {relation.type.value}",
+                            entity_id=task.id,
+                            path=task_path,
+                        )
+                    )
+                elif relation.target_id not in task_by_id:
+                    issues.append(
+                        ValidationIssue(
+                            severity="error",
+                            code="missing_task_relation",
+                            message=(
+                                f"Task relation {relation.type.value} references missing "
+                                f"task {relation.target_id}"
+                            ),
+                            entity_id=task.id,
+                            path=task_path,
+                        )
+                    )
+            if task.work_logs:
+                logged_minutes = round(sum(log.minutes for log in task.work_logs), 2)
+                if abs(logged_minutes - task.actual_minutes) > 0.01:
+                    issues.append(
+                        ValidationIssue(
+                            severity="error",
+                            code="work_log_projection_mismatch",
+                            message=(
+                                f"actual_minutes={task.actual_minutes} but work logs "
+                                f"sum to {logged_minutes}"
+                            ),
+                            entity_id=task.id,
+                            path=task_path,
+                        )
+                    )
+            if (
+                task.rigor is TaskRigor.ASSURED
+                and task.completion.assurance_reviewed_at is not None
+                and task.completion.assurance_review_hash != task.assurance_input_hash()
+                and not task.completion.assurance_grandfathered
+            ):
+                issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        code="stale_assurance_review",
+                        message="Assurance review does not match current constraints/assumptions",
+                        entity_id=task.id,
+                        path=task_path,
+                    )
+                )
+            if task.status is TaskStatus.DONE and task.remaining_estimate_minutes not in {
+                None,
+                0,
+            }:
+                issues.append(
+                    ValidationIssue(
+                        severity="warning",
+                        code="completed_task_has_remaining_estimate",
+                        message="Completed task retains a non-zero remaining estimate",
+                        entity_id=task.id,
+                        path=task_path,
+                    )
+                )
+
+        dependency_graph: dict[str, set[str]] = {task.id: set() for task in tasks}
+        for task in tasks:
+            for relation in task.relations:
+                if relation.target_id not in task_by_id:
+                    continue
+                if relation.type is RelationType.BLOCKS:
+                    dependency_graph[task.id].add(relation.target_id)
+                elif relation.type is RelationType.DEPENDS_ON:
+                    dependency_graph[relation.target_id].add(task.id)
+        visiting: set[str] = set()
+        visited: set[str] = set()
+
+        def has_cycle(node: str) -> bool:
+            if node in visiting:
+                return True
+            if node in visited:
+                return False
+            visiting.add(node)
+            cyclic = any(has_cycle(target) for target in dependency_graph[node])
+            visiting.remove(node)
+            visited.add(node)
+            return cyclic
+
+        if any(has_cycle(task_id) for task_id in dependency_graph):
+            issues.append(
+                ValidationIssue(
+                    severity="error",
+                    code="task_dependency_cycle",
+                    message="Task dependency graph contains a cycle",
+                )
+            )
         for project in projects.values():
             if project.status is ProjectStatus.ACTIVE and not any(
                 task.project_id == project.id and task.status in OPEN_TASK_STATUSES
@@ -1237,12 +1857,26 @@ class GtdService:
     def metrics(self) -> MetricsReport:
         tasks = self.list_tasks()
         completed = [task for task in tasks if task.status is TaskStatus.DONE and task.completed_at]
-        focus_seconds_by_task: dict[str, float] = {}
+        logged_seconds_by_task: dict[str, float] = {}
+        legacy_stopped_seconds_by_task: dict[str, float] = {}
         for event in self.events.read_all():
-            if event.type == EventType.TASK_STOPPED and event.entity_id is not None:
-                focus_seconds_by_task[event.entity_id] = focus_seconds_by_task.get(
-                    event.entity_id, 0.0
-                ) + float(event.payload.get("duration_seconds", 0.0))
+            if event.entity_id is None:
+                continue
+            if event.type == EventType.TASK_WORK_LOGGED:
+                logged_seconds_by_task[event.entity_id] = (
+                    logged_seconds_by_task.get(event.entity_id, 0.0)
+                    + float(event.payload.get("minutes", 0.0)) * 60
+                )
+            elif event.type == EventType.TASK_STOPPED and not event.payload.get("work_log_id"):
+                legacy_stopped_seconds_by_task[event.entity_id] = (
+                    legacy_stopped_seconds_by_task.get(event.entity_id, 0.0)
+                    + float(event.payload.get("duration_seconds", 0.0))
+                )
+        focus_seconds_by_task = {
+            task.id: logged_seconds_by_task.get(task.id, 0.0)
+            + legacy_stopped_seconds_by_task.get(task.id, 0.0)
+            for task in tasks
+        }
         now = utc_now()
         recent = [
             task

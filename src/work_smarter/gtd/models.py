@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+import calendar
+import hashlib
+import json
+from datetime import UTC, date, datetime, timedelta
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
 
 
 def utc_now() -> datetime:
@@ -51,6 +54,25 @@ class TaskRigor(StrEnum):
     ASSURED = "assured"
 
 
+class Urgency(StrEnum):
+    LOW = "low"
+    NORMAL = "normal"
+    HIGH = "high"
+    CRITICAL = "critical"
+
+
+class Impact(StrEnum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
+class Commitment(StrEnum):
+    NONE = "none"
+    INTENDED = "intended"
+    COMMITTED = "committed"
+
+
 class TaskLifecycle(StrEnum):
     OPEN = "open"
     COMPLETED = "completed"
@@ -70,6 +92,7 @@ class ExecutionState(StrEnum):
 
 class RelationType(StrEnum):
     BLOCKS = "blocks"
+    DEPENDS_ON = "depends_on"
     RELATES_TO = "relates_to"
     DUPLICATES = "duplicates"
     IMPLEMENTS = "implements"
@@ -86,6 +109,18 @@ class TaskResolution(StrEnum):
     CANCELLED = "cancelled"
     DUPLICATE = "duplicate"
     WONT_DO = "wont_do"
+
+
+class WorkLogSource(StrEnum):
+    TIMER = "timer"
+    MANUAL = "manual"
+    MIGRATED = "migrated"
+
+
+class RecurrenceFrequency(StrEnum):
+    DAILY = "daily"
+    WEEKLY = "weekly"
+    MONTHLY = "monthly"
 
 
 class ProjectStatus(StrEnum):
@@ -199,15 +234,97 @@ class CompletionCondition(StrictModel):
     met_at: datetime | None = None
     evidence: str | None = None
 
+    @field_validator("id", "text")
+    @classmethod
+    def validate_required_text(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("completion condition ID and text cannot be blank")
+        return cleaned
+
+    @field_validator("evidence")
+    @classmethod
+    def validate_evidence(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("completion evidence cannot be blank")
+        return cleaned
+
 
 class CompletionDefinition(StrictModel):
     obvious: bool = True
     conditions: list[CompletionCondition] = Field(default_factory=list)
     waiver_reason: str | None = None
+    assurance_reviewed_at: datetime | None = None
+    assurance_review_hash: str | None = None
+    assurance_grandfathered: bool = False
+
+    @field_validator("waiver_reason")
+    @classmethod
+    def validate_waiver_reason(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("completion waiver reason cannot be blank")
+        return cleaned
+
+    @model_validator(mode="after")
+    def validate_unique_condition_ids(self) -> CompletionDefinition:
+        ids = [condition.id for condition in self.conditions]
+        if len(ids) != len(set(ids)):
+            raise ValueError("completion condition IDs must be unique")
+        return self
+
+
+class WorkLog(StrictModel):
+    id: str
+    minutes: float = Field(gt=0)
+    source: WorkLogSource = WorkLogSource.MANUAL
+    note: str | None = None
+    started_at: datetime | None = None
+    stopped_at: datetime | None = None
+    recorded_at: datetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def validate_timer_range(self) -> WorkLog:
+        started = self.started_at
+        stopped = self.stopped_at
+        if started is not None and started.tzinfo is None:
+            started = started.replace(tzinfo=UTC)
+        if stopped is not None and stopped.tzinfo is None:
+            stopped = stopped.replace(tzinfo=UTC)
+        if started is not None and stopped is not None and stopped < started:
+            raise ValueError("work log stopped_at cannot precede started_at")
+        return self
+
+
+class RecurrenceRule(StrictModel):
+    frequency: RecurrenceFrequency
+    interval: int = Field(default=1, ge=1)
+    anchor_on: date
+    until_on: date | None = None
+
+    def next_after(self, current: date) -> date | None:
+        if self.frequency is RecurrenceFrequency.DAILY:
+            candidate = current + timedelta(days=self.interval)
+        elif self.frequency is RecurrenceFrequency.WEEKLY:
+            candidate = current + timedelta(weeks=self.interval)
+        else:
+            month_index = current.year * 12 + current.month - 1 + self.interval
+            year, zero_based_month = divmod(month_index, 12)
+            month = zero_based_month + 1
+            day = min(self.anchor_on.day, calendar.monthrange(year, month)[1])
+            candidate = date(year, month, day)
+        if self.until_on is not None and candidate > self.until_on:
+            return None
+        return candidate
 
 
 class Task(StrictModel):
-    schema_version: Literal[2] = 2
+    schema_version: Literal[3] = 3
     id: str
     kind: Literal["task"] = "task"
     revision: int = Field(default=1, ge=1)
@@ -217,6 +334,9 @@ class Task(StrictModel):
     goal: str | None = None
     why: str | None = None
     desired_outcome: str | None = None
+    urgency: Urgency = Urgency.NORMAL
+    impact: Impact = Impact.MEDIUM
+    commitment: Commitment = Commitment.NONE
     lifecycle: TaskLifecycle = TaskLifecycle.OPEN
     disposition: TaskDisposition = TaskDisposition.NEXT
     execution: TaskExecution = Field(default_factory=TaskExecution)
@@ -229,8 +349,9 @@ class Task(StrictModel):
     contexts: list[str] = Field(default_factory=list)
     energy: Energy | None = None
     original_estimate_minutes: int | None = Field(default=None, gt=0)
-    remaining_estimate_minutes: int | None = Field(default=None, ge=0)
+    remaining_estimate_minutes: float | None = Field(default=None, ge=0)
     actual_minutes: float = Field(default=0, ge=0)
+    work_logs: list[WorkLog] = Field(default_factory=list)
     schedule: TaskSchedule = Field(default_factory=TaskSchedule)
     waiting: WaitingDetail | None = None
     blockers: list[TaskBlocker] = Field(default_factory=list)
@@ -241,13 +362,42 @@ class Task(StrictModel):
     resolution: TaskResolution | None = None
     result_summary: str | None = None
     evidence_links: list[str] = Field(default_factory=list)
+    recurrence: RecurrenceRule | None = None
+    recurrence_series_id: str | None = None
+    occurrence_on: date | None = None
     completed_at: datetime | None = None
     tags: list[str] = Field(default_factory=list)
 
+    @field_validator("goal", "why", "desired_outcome")
+    @classmethod
+    def validate_optional_intent_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("task intent fields cannot be blank")
+        return cleaned
+
     @model_validator(mode="before")
     @classmethod
-    def migrate_v1(cls, value: Any) -> Any:
-        if not isinstance(value, dict) or value.get("schema_version", 2) != 1:
+    def migrate_legacy(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        version = value.get("schema_version", 3)
+        if version == 3:
+            return value
+        if version == 2:
+            data = dict(value)
+            data["schema_version"] = 3
+            completion = dict(data.get("completion") or {})
+            if data.get("lifecycle") == TaskLifecycle.COMPLETED and data.get("rigor") in {
+                TaskRigor.STANDARD,
+                TaskRigor.ASSURED,
+            }:
+                completion["assurance_grandfathered"] = True
+            data["completion"] = completion
+            return data
+        if version != 1:
             return value
         data = dict(value)
         status = TaskStatus(data.pop("status", TaskStatus.NEXT))
@@ -257,6 +407,7 @@ class Task(StrictModel):
         execution: dict[str, Any] = {"state": ExecutionState.IDLE}
         blockers: list[dict[str, Any]] = []
         resolution: TaskResolution | None = None
+        legacy_blocked_reason = data.pop("blocked_reason", None)
         if status is TaskStatus.DOING:
             execution = {
                 "state": ExecutionState.DOING,
@@ -272,12 +423,18 @@ class Task(StrictModel):
             blockers.append(
                 {
                     "id": "BLK-LEGACY-1",
-                    "description": data.pop("blocked_reason", None) or "Legacy blocker",
+                    "description": legacy_blocked_reason or "Legacy blocker",
                     "created_at": created_at,
                 }
             )
-        else:
-            data.pop("blocked_reason", None)
+        if legacy_blocked_reason and status is not TaskStatus.BLOCKED:
+            blockers.append(
+                {
+                    "id": "BLK-LEGACY-1",
+                    "description": legacy_blocked_reason,
+                    "created_at": created_at,
+                }
+            )
         if status is TaskStatus.DONE:
             lifecycle = TaskLifecycle.COMPLETED
             resolution = TaskResolution.COMPLETED
@@ -303,7 +460,7 @@ class Task(StrictModel):
         }
         return {
             **data,
-            "schema_version": 2,
+            "schema_version": 3,
             "revision": 1,
             "work_type": WorkType.ACTION,
             "rigor": TaskRigor.QUICK,
@@ -318,8 +475,9 @@ class Task(StrictModel):
             "completion": {
                 "obvious": True,
                 "conditions": [
-                    {"id": f"CC-{index}", "text": text}
+                    {"id": f"CC-{index}", "text": str(text).strip()}
                     for index, text in enumerate(criteria, start=1)
+                    if str(text).strip()
                 ],
             },
             "resolution": resolution,
@@ -336,6 +494,47 @@ class Task(StrictModel):
                 raise ValueError("completed tasks require completed_at")
             if self.resolution is None:
                 raise ValueError("completed tasks require resolution")
+            unmet = [
+                condition for condition in self.completion.conditions if condition.met_at is None
+            ]
+            if (
+                self.rigor in {TaskRigor.STANDARD, TaskRigor.ASSURED}
+                and unmet
+                and not self.completion.waiver_reason
+                and not self.completion.assurance_grandfathered
+            ):
+                raise ValueError("completed rigorous tasks require every condition or a waiver")
+            missing_evidence = [
+                condition
+                for condition in self.completion.conditions
+                if condition.met_at is not None and not condition.evidence
+            ]
+            if (
+                self.rigor is TaskRigor.ASSURED
+                and missing_evidence
+                and not self.completion.waiver_reason
+                and not self.completion.assurance_grandfathered
+            ):
+                raise ValueError("completed assured tasks require condition evidence or a waiver")
+            if (
+                self.rigor is TaskRigor.ASSURED
+                and self.completion.assurance_reviewed_at is None
+                and not self.completion.waiver_reason
+                and not self.completion.assurance_grandfathered
+            ):
+                raise ValueError(
+                    "completed assured tasks require constraints and assumptions review or a waiver"
+                )
+            if (
+                self.rigor is TaskRigor.ASSURED
+                and self.completion.assurance_reviewed_at is not None
+                and self.completion.assurance_review_hash != self.assurance_input_hash()
+                and not self.completion.waiver_reason
+                and not self.completion.assurance_grandfathered
+            ):
+                raise ValueError(
+                    "assured task review no longer matches constraints and assumptions"
+                )
         if self.lifecycle is TaskLifecycle.OPEN and self.resolution is not None:
             raise ValueError("open tasks cannot have a resolution")
         if self.rigor in {TaskRigor.STANDARD, TaskRigor.ASSURED}:
@@ -412,12 +611,27 @@ class Task(StrictModel):
     def completion_criteria(self) -> list[str]:
         return [condition.text for condition in self.completion.conditions]
 
+    @computed_field
+    @property
+    def next_occurrence_on(self) -> date | None:
+        if self.recurrence is None:
+            return None
+        return self.recurrence.next_after(self.occurrence_on or self.recurrence.anchor_on)
+
     def persistent_dict(self) -> dict[str, Any]:
         return self.model_dump(
             mode="json",
             exclude_none=True,
             exclude_computed_fields=True,
         )
+
+    def assurance_input_hash(self) -> str:
+        payload = {
+            "constraints": self.constraints,
+            "assumptions": [assumption.model_dump(mode="json") for assumption in self.assumptions],
+        }
+        encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
 
 
 class GtdProject(StrictModel):
@@ -480,6 +694,7 @@ class CompletionResult(StrictModel):
     task: Task
     project_attention_required: bool = False
     project_id: str | None = None
+    next_occurrence: Task | None = None
 
 
 class StatusReport(StrictModel):
