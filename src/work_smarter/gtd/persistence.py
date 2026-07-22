@@ -11,6 +11,7 @@ from work_smarter.gtd.models import (
     Reference,
     SomedayItem,
     Task,
+    WeeklyReviewSession,
 )
 from work_smarter.storage.workspace import EntityRegistry, EntitySpec, Workspace
 
@@ -21,6 +22,7 @@ GTD_ENTITY_SPECS = (
     EntitySpec("reference", Reference, "knowledge/gtd"),
     EntitySpec("someday", SomedayItem, "someday"),
     EntitySpec("inbox_archive", ArchivedInboxItem, "archive/inbox", archived=True),
+    EntitySpec("weekly_review", WeeklyReviewSession, "gtd/reviews"),
 )
 GTD_ENTITY_REGISTRY = EntityRegistry(GTD_ENTITY_SPECS)
 
