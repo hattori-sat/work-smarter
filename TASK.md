@@ -89,16 +89,23 @@ main
 
 ### M2 GTD workflow — `feat/gtd-workflow`
 
-- [ ] clarify decision treeとtwo-minute handling
-- [ ] explicit transition validator
-- [ ] delegate→waiting-for transition
-- [ ] delegatee / requested-at / expected-by / follow-up-on / escalation-after
-- [ ] response log、chase、resolve、reopen
-- [ ] blocked reason + blocker link + unblock
-- [ ] calendar / not-before / due semantics
-- [ ] daily dashboard、tickler、weekly review checklist state
-- [ ] cycle time、lead time、WIP、estimate error、waiting age metrics
-- [ ] recurring task generation
+- Current branch: `feat/gtd-workflow`
+- Status: COMPLETE
+
+- [x] clarify decision treeとtwo-minute handling
+- [x] explicit transition validator
+- [x] delegate→waiting-for transition
+- [x] delegatee / requested-at / expected-by / follow-up-on / escalation-after
+- [x] response log、chase、resolve、reopen
+- [x] blocked reason + blocker link + unblock
+- [x] calendar / not-before / due semantics
+- [x] daily dashboard、tickler、再開可能なweekly review checklist state
+- [x] cycle time、lead time、WIP、estimate error、waiting/blocked age metrics
+- [x] recurring task generation
+- [x] append-only work-log correction
+- [x] workspace timezoneを使った日付境界
+- [x] CLI / typed HTTP API
+- [x] 107 tests、85% coverage
 
 ### M3 Knowledge — `feat/knowledge`
 

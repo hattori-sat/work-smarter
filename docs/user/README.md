@@ -21,3 +21,7 @@ Work Smarterは、個人の業務を頭の外へ出し、いま実行する1件�
 
 Work Smarterはpriorityの数字だけで次の行動を決めません。context、使える時間、energy、期限、
 commitment、依存関係から「いま実行可能か」を先に判定します。
+
+日々は`ws today`、`ws focus`、`ws start`を使い、他者待ちやblockerは
+[GTD workflow](gtd-workflow.md#waiting-for-without-memory-work)のinteractionとして記録します。週次reviewは
+保存されるsessionなので、途中で終了しても同じ場所から再開できます。
