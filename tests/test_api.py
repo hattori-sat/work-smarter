@@ -119,3 +119,107 @@ def test_openapi_exposes_typed_contracts_for_vscode_clients(tmp_path: Path) -> N
     ]["schema"]
     assert task_schema["items"]["$ref"] == "#/components/schemas/Task"
     assert status_schema["$ref"] == "#/components/schemas/StatusReport"
+
+
+def test_api_defines_reads_and_checks_a_rigorous_ticket(tmp_path: Path) -> None:
+    with TestClient(create_app(tmp_path)) as client:
+        client.post("/api/workspace/init")
+        added = client.post(
+            "/api/gtd/tasks",
+            json={"text": "Make the release decision"},
+        )
+        task_id = added.json()["created"][0]["id"]
+
+        defined = client.patch(
+            f"/api/gtd/tasks/{task_id}",
+            json={
+                "work_type": "decision",
+                "rigor": "standard",
+                "goal": "Record a defensible release decision",
+                "why": "The rollout has irreversible effects",
+                "desired_outcome": "A go/no-go decision with rationale",
+                "constraints": ["Security review must be complete"],
+                "assumptions": ["Load test data is representative"],
+                "completion_criteria": ["Decision and rationale are recorded"],
+            },
+        )
+        assert defined.status_code == 200
+        assert defined.json()["rigor"] == "standard"
+        assert defined.json()["completion"]["conditions"][0]["id"] == "CC-1"
+
+        shown = client.get(f"/api/gtd/tasks/{task_id}")
+        assert shown.status_code == 200
+        assert shown.json()["goal"] == "Record a defensible release decision"
+
+        checked = client.post(
+            f"/api/gtd/tasks/{task_id}/completion/CC-1",
+            json={"evidence": "knowledge/decisions/release.md"},
+        )
+        assert checked.status_code == 200
+        assert checked.json()["completion"]["conditions"][0]["met_at"] is not None
+
+
+def test_api_creates_a_directional_task_link(tmp_path: Path) -> None:
+    with TestClient(create_app(tmp_path)) as client:
+        client.post("/api/workspace/init")
+        task_ids = [
+            client.post("/api/gtd/tasks", json={"text": title}).json()["created"][0]["id"]
+            for title in ("Produce input", "Use input")
+        ]
+
+        linked = client.post(
+            f"/api/gtd/tasks/{task_ids[0]}/links",
+            json={"target_id": task_ids[1], "relation_type": "blocks"},
+        )
+
+        assert linked.status_code == 200
+        assert linked.json()["relations"] == [{"type": "blocks", "target_id": task_ids[1]}]
+
+
+def test_api_manages_parent_effort_priority_and_recurrence(tmp_path: Path) -> None:
+    with TestClient(create_app(tmp_path)) as client:
+        client.post("/api/workspace/init")
+        parent_id, task_id = [
+            client.post("/api/gtd/tasks", json={"text": title}).json()["created"][0]["id"]
+            for title in ("Prepare review", "Inspect evidence")
+        ]
+
+        defined = client.patch(
+            f"/api/gtd/tasks/{task_id}",
+            json={
+                "urgency": "high",
+                "impact": "high",
+                "commitment": "committed",
+                "original_estimate_minutes": 60,
+            },
+        )
+        assert defined.json()["remaining_estimate_minutes"] == 60
+
+        parented = client.put(
+            f"/api/gtd/tasks/{task_id}/parent",
+            json={"parent_id": parent_id},
+        )
+        assert parented.json()["parent_id"] == parent_id
+
+        logged = client.post(
+            f"/api/gtd/tasks/{task_id}/work-logs",
+            json={"minutes": 15, "note": "Inspected first trace"},
+        )
+        assert logged.json()["actual_minutes"] == 15
+
+        estimated = client.patch(
+            f"/api/gtd/tasks/{task_id}/remaining-estimate",
+            json={"minutes": 30, "reason": "One more environment remains"},
+        )
+        assert estimated.json()["original_estimate_minutes"] == 60
+        assert estimated.json()["remaining_estimate_minutes"] == 30
+
+        recurring = client.put(
+            f"/api/gtd/tasks/{task_id}/recurrence",
+            json={
+                "frequency": "weekly",
+                "interval": 1,
+                "anchor_on": "2026-07-23",
+            },
+        )
+        assert recurring.json()["next_occurrence_on"] == "2026-07-30"

@@ -19,6 +19,7 @@ from work_smarter.gtd.models import (
     InboxItem,
     Reference,
     Task,
+    TaskExecution,
     TaskStatus,
 )
 from work_smarter.gtd.persistence import open_workspace
@@ -316,7 +317,10 @@ def test_weekly_review_validation_and_metrics(
     doing_record = workspace.find_record(task.id, kinds={"task"})
     doing = doing_record.entity
     assert isinstance(doing, Task)
-    doing.started_at = datetime.now(UTC) - timedelta(minutes=30)
+    doing.execution = TaskExecution(
+        state="doing",
+        started_at=datetime.now(UTC) - timedelta(minutes=30),
+    )
     doing.created_at = datetime.now(UTC) - timedelta(hours=2)
     workspace.write(doing, doing_record.body)
     completion = service.complete_task(task.id)

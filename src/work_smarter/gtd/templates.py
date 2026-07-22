@@ -11,6 +11,18 @@ DEFAULT_TEMPLATES = {
 
 {{ intent }}
 
+## Why
+
+## Goal
+
+## Desired Outcome
+
+## Constraints
+
+## Assumptions
+
+## Definition of Done
+
 ## Notes
 
 ## Result / Evidence

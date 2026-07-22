@@ -6,7 +6,8 @@ Work Smarterは、個人の業務を頭の外へ出し、いま実行する1件�
 
 1. root [README](../../README.md) の手順でinstallとworkspace初期化を行う。
 2. [GTD workflow](gtd-workflow.md) に従い、captureとquick-addを使い分ける。
-3. Markdownを直接編集する場合は [Workspace guide](workspace.md) を確認する。
+3. 重要な業務は [Task tickets](task-tickets.md) でgoalと完了条件を定義する。
+4. Markdownを直接編集する場合は [Workspace guide](workspace.md) を確認する。
 
 ## Mental model
 

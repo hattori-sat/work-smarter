@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+import calendar
+import hashlib
+import json
+from datetime import UTC, date, datetime, timedelta
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
 
 
 def utc_now() -> datetime:
@@ -35,6 +38,89 @@ class TaskStatus(StrEnum):
     BLOCKED = "blocked"
     DONE = "done"
     CANCELLED = "cancelled"
+
+
+class WorkType(StrEnum):
+    ACTION = "action"
+    DECISION = "decision"
+    INVESTIGATION = "investigation"
+    COMMUNICATION = "communication"
+    ROUTINE = "routine"
+
+
+class TaskRigor(StrEnum):
+    QUICK = "quick"
+    STANDARD = "standard"
+    ASSURED = "assured"
+
+
+class Urgency(StrEnum):
+    LOW = "low"
+    NORMAL = "normal"
+    HIGH = "high"
+    CRITICAL = "critical"
+
+
+class Impact(StrEnum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
+class Commitment(StrEnum):
+    NONE = "none"
+    INTENDED = "intended"
+    COMMITTED = "committed"
+
+
+class TaskLifecycle(StrEnum):
+    OPEN = "open"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+
+
+class TaskDisposition(StrEnum):
+    NEXT = "next"
+    WAITING = "waiting"
+    CALENDAR = "calendar"
+
+
+class ExecutionState(StrEnum):
+    IDLE = "idle"
+    DOING = "doing"
+
+
+class RelationType(StrEnum):
+    BLOCKS = "blocks"
+    DEPENDS_ON = "depends_on"
+    RELATES_TO = "relates_to"
+    DUPLICATES = "duplicates"
+    IMPLEMENTS = "implements"
+
+
+class AssumptionStatus(StrEnum):
+    OPEN = "open"
+    VALIDATED = "validated"
+    INVALIDATED = "invalidated"
+
+
+class TaskResolution(StrEnum):
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+    DUPLICATE = "duplicate"
+    WONT_DO = "wont_do"
+
+
+class WorkLogSource(StrEnum):
+    TIMER = "timer"
+    MANUAL = "manual"
+    MIGRATED = "migrated"
+
+
+class RecurrenceFrequency(StrEnum):
+    DAILY = "daily"
+    WEEKLY = "weekly"
+    MONTHLY = "monthly"
 
 
 class ProjectStatus(StrEnum):
@@ -92,44 +178,459 @@ class ArchivedInboxItem(StrictModel):
     tags: list[str] = Field(default_factory=list)
 
 
+class TaskExecution(StrictModel):
+    state: ExecutionState = ExecutionState.IDLE
+    started_at: datetime | None = None
+
+    @model_validator(mode="after")
+    def validate_started_at(self) -> TaskExecution:
+        if self.state is ExecutionState.DOING and self.started_at is None:
+            raise ValueError("doing execution requires started_at")
+        if self.state is ExecutionState.IDLE and self.started_at is not None:
+            raise ValueError("idle execution cannot retain started_at")
+        return self
+
+
+class TaskSchedule(StrictModel):
+    not_before: datetime | None = None
+    scheduled_for: datetime | None = None
+    due_on: date | None = None
+
+
+class WaitingDetail(StrictModel):
+    target_kind: Literal["person", "external"] = "person"
+    target: str = Field(min_length=1)
+    request: str | None = None
+    delegated_at: datetime = Field(default_factory=utc_now)
+    expected_on: date | None = None
+    follow_up_on: date | None = None
+    escalation_on: date | None = None
+    escalation_to: str | None = None
+    last_followed_up_at: datetime | None = None
+
+
+class TaskBlocker(StrictModel):
+    id: str
+    description: str = Field(min_length=1)
+    task_id: str | None = None
+    created_at: datetime = Field(default_factory=utc_now)
+    resolved_at: datetime | None = None
+
+
+class TaskRelation(StrictModel):
+    type: RelationType
+    target_id: str
+
+
+class Assumption(StrictModel):
+    id: str
+    statement: str = Field(min_length=1)
+    status: AssumptionStatus = AssumptionStatus.OPEN
+
+
+class CompletionCondition(StrictModel):
+    id: str
+    text: str = Field(min_length=1)
+    met_at: datetime | None = None
+    evidence: str | None = None
+
+    @field_validator("id", "text")
+    @classmethod
+    def validate_required_text(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("completion condition ID and text cannot be blank")
+        return cleaned
+
+    @field_validator("evidence")
+    @classmethod
+    def validate_evidence(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("completion evidence cannot be blank")
+        return cleaned
+
+
+class CompletionDefinition(StrictModel):
+    obvious: bool = True
+    conditions: list[CompletionCondition] = Field(default_factory=list)
+    waiver_reason: str | None = None
+    assurance_reviewed_at: datetime | None = None
+    assurance_review_hash: str | None = None
+    assurance_grandfathered: bool = False
+
+    @field_validator("waiver_reason")
+    @classmethod
+    def validate_waiver_reason(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("completion waiver reason cannot be blank")
+        return cleaned
+
+    @model_validator(mode="after")
+    def validate_unique_condition_ids(self) -> CompletionDefinition:
+        ids = [condition.id for condition in self.conditions]
+        if len(ids) != len(set(ids)):
+            raise ValueError("completion condition IDs must be unique")
+        return self
+
+
+class WorkLog(StrictModel):
+    id: str
+    minutes: float = Field(gt=0)
+    source: WorkLogSource = WorkLogSource.MANUAL
+    note: str | None = None
+    started_at: datetime | None = None
+    stopped_at: datetime | None = None
+    recorded_at: datetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def validate_timer_range(self) -> WorkLog:
+        started = self.started_at
+        stopped = self.stopped_at
+        if started is not None and started.tzinfo is None:
+            started = started.replace(tzinfo=UTC)
+        if stopped is not None and stopped.tzinfo is None:
+            stopped = stopped.replace(tzinfo=UTC)
+        if started is not None and stopped is not None and stopped < started:
+            raise ValueError("work log stopped_at cannot precede started_at")
+        return self
+
+
+class RecurrenceRule(StrictModel):
+    frequency: RecurrenceFrequency
+    interval: int = Field(default=1, ge=1)
+    anchor_on: date
+    until_on: date | None = None
+
+    def next_after(self, current: date) -> date | None:
+        if self.frequency is RecurrenceFrequency.DAILY:
+            candidate = current + timedelta(days=self.interval)
+        elif self.frequency is RecurrenceFrequency.WEEKLY:
+            candidate = current + timedelta(weeks=self.interval)
+        else:
+            month_index = current.year * 12 + current.month - 1 + self.interval
+            year, zero_based_month = divmod(month_index, 12)
+            month = zero_based_month + 1
+            day = min(self.anchor_on.day, calendar.monthrange(year, month)[1])
+            candidate = date(year, month, day)
+        if self.until_on is not None and candidate > self.until_on:
+            return None
+        return candidate
+
+
 class Task(StrictModel):
-    schema_version: Literal[1] = 1
+    schema_version: Literal[3] = 3
     id: str
     kind: Literal["task"] = "task"
+    revision: int = Field(default=1, ge=1)
+    work_type: WorkType = WorkType.ACTION
+    rigor: TaskRigor = TaskRigor.QUICK
     title: str = Field(min_length=1)
-    status: TaskStatus = TaskStatus.NEXT
+    goal: str | None = None
+    why: str | None = None
+    desired_outcome: str | None = None
+    urgency: Urgency = Urgency.NORMAL
+    impact: Impact = Impact.MEDIUM
+    commitment: Commitment = Commitment.NONE
+    lifecycle: TaskLifecycle = TaskLifecycle.OPEN
+    disposition: TaskDisposition = TaskDisposition.NEXT
+    execution: TaskExecution = Field(default_factory=TaskExecution)
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
     source_inbox_id: str | None = None
     project_id: str | None = None
+    parent_id: str | None = None
+    relations: list[TaskRelation] = Field(default_factory=list)
     contexts: list[str] = Field(default_factory=list)
     energy: Energy | None = None
-    estimate_minutes: int | None = Field(default=None, gt=0)
+    original_estimate_minutes: int | None = Field(default=None, gt=0)
+    remaining_estimate_minutes: float | None = Field(default=None, ge=0)
     actual_minutes: float = Field(default=0, ge=0)
-    not_before: datetime | None = None
-    due_on: date | None = None
-    scheduled_for: datetime | None = None
-    waiting_for: str | None = None
-    follow_up_on: date | None = None
-    blocked_reason: str | None = None
-    started_at: datetime | None = None
+    work_logs: list[WorkLog] = Field(default_factory=list)
+    schedule: TaskSchedule = Field(default_factory=TaskSchedule)
+    waiting: WaitingDetail | None = None
+    blockers: list[TaskBlocker] = Field(default_factory=list)
+    constraints: list[str] = Field(default_factory=list)
+    assumptions: list[Assumption] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+    completion: CompletionDefinition = Field(default_factory=CompletionDefinition)
+    resolution: TaskResolution | None = None
+    result_summary: str | None = None
+    evidence_links: list[str] = Field(default_factory=list)
+    recurrence: RecurrenceRule | None = None
+    recurrence_series_id: str | None = None
+    occurrence_on: date | None = None
     completed_at: datetime | None = None
-    completion_criteria: list[str] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
+
+    @field_validator("goal", "why", "desired_outcome")
+    @classmethod
+    def validate_optional_intent_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("task intent fields cannot be blank")
+        return cleaned
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        version = value.get("schema_version", 3)
+        if version == 3:
+            return value
+        if version == 2:
+            data = dict(value)
+            data["schema_version"] = 3
+            completion = dict(data.get("completion") or {})
+            if (
+                data.get("lifecycle") == TaskLifecycle.COMPLETED
+                and data.get("rigor") == TaskRigor.ASSURED
+                and not completion.get("assurance_reviewed_at")
+            ):
+                completion["assurance_grandfathered"] = True
+            data["completion"] = completion
+            return data
+        if version != 1:
+            return value
+        data = dict(value)
+        status = TaskStatus(data.pop("status", TaskStatus.NEXT))
+        created_at = data.get("created_at") or utc_now()
+        lifecycle = TaskLifecycle.OPEN
+        disposition = TaskDisposition.NEXT
+        execution: dict[str, Any] = {"state": ExecutionState.IDLE}
+        blockers: list[dict[str, Any]] = []
+        resolution: TaskResolution | None = None
+        legacy_blocked_reason = data.pop("blocked_reason", None)
+        if status is TaskStatus.DOING:
+            execution = {
+                "state": ExecutionState.DOING,
+                "started_at": data.pop("started_at", None) or created_at,
+            }
+        else:
+            data.pop("started_at", None)
+        if status is TaskStatus.WAITING:
+            disposition = TaskDisposition.WAITING
+        elif status is TaskStatus.SCHEDULED:
+            disposition = TaskDisposition.CALENDAR
+        elif status is TaskStatus.BLOCKED:
+            blockers.append(
+                {
+                    "id": "BLK-LEGACY-1",
+                    "description": legacy_blocked_reason or "Legacy blocker",
+                    "created_at": created_at,
+                }
+            )
+        if legacy_blocked_reason and status is not TaskStatus.BLOCKED:
+            blockers.append(
+                {
+                    "id": "BLK-LEGACY-1",
+                    "description": legacy_blocked_reason,
+                    "created_at": created_at,
+                }
+            )
+        if status is TaskStatus.DONE:
+            lifecycle = TaskLifecycle.COMPLETED
+            resolution = TaskResolution.COMPLETED
+        elif status is TaskStatus.CANCELLED:
+            lifecycle = TaskLifecycle.CANCELLED
+            resolution = TaskResolution.CANCELLED
+
+        waiting_for = data.pop("waiting_for", None)
+        follow_up_on = data.pop("follow_up_on", None)
+        waiting = None
+        if waiting_for:
+            waiting = {
+                "target": waiting_for,
+                "delegated_at": created_at,
+                "follow_up_on": follow_up_on,
+            }
+        criteria = data.pop("completion_criteria", []) or []
+        estimate = data.pop("estimate_minutes", None)
+        schedule = {
+            "not_before": data.pop("not_before", None),
+            "scheduled_for": data.pop("scheduled_for", None),
+            "due_on": data.pop("due_on", None),
+        }
+        return {
+            **data,
+            "schema_version": 3,
+            "revision": 1,
+            "work_type": WorkType.ACTION,
+            "rigor": TaskRigor.QUICK,
+            "lifecycle": lifecycle,
+            "disposition": disposition,
+            "execution": execution,
+            "original_estimate_minutes": estimate,
+            "remaining_estimate_minutes": estimate,
+            "schedule": schedule,
+            "waiting": waiting,
+            "blockers": blockers,
+            "completion": {
+                "obvious": True,
+                "conditions": [
+                    {"id": f"CC-{index}", "text": str(text).strip()}
+                    for index, text in enumerate(criteria, start=1)
+                    if str(text).strip()
+                ],
+            },
+            "resolution": resolution,
+        }
 
     @model_validator(mode="after")
     def validate_state_fields(self) -> Task:
-        if self.status is TaskStatus.WAITING and not self.waiting_for:
-            raise ValueError("waiting tasks require waiting_for")
-        if self.status is TaskStatus.SCHEDULED and self.scheduled_for is None:
-            raise ValueError("scheduled tasks require scheduled_for")
-        if self.status is TaskStatus.BLOCKED and not self.blocked_reason:
-            raise ValueError("blocked tasks require blocked_reason")
-        if self.status is TaskStatus.DOING and self.started_at is None:
-            raise ValueError("doing tasks require started_at")
-        if self.status is TaskStatus.DONE and self.completed_at is None:
-            raise ValueError("done tasks require completed_at")
+        if self.disposition is TaskDisposition.WAITING and self.waiting is None:
+            raise ValueError("waiting tasks require waiting detail")
+        if self.disposition is TaskDisposition.CALENDAR and self.schedule.scheduled_for is None:
+            raise ValueError("calendar tasks require scheduled_for")
+        if self.lifecycle is TaskLifecycle.COMPLETED:
+            if self.completed_at is None:
+                raise ValueError("completed tasks require completed_at")
+            if self.resolution is None:
+                raise ValueError("completed tasks require resolution")
+            unmet = [
+                condition for condition in self.completion.conditions if condition.met_at is None
+            ]
+            if (
+                self.rigor in {TaskRigor.STANDARD, TaskRigor.ASSURED}
+                and unmet
+                and not self.completion.waiver_reason
+            ):
+                raise ValueError("completed rigorous tasks require every condition or a waiver")
+            missing_evidence = [
+                condition
+                for condition in self.completion.conditions
+                if condition.met_at is not None and not condition.evidence
+            ]
+            if (
+                self.rigor is TaskRigor.ASSURED
+                and missing_evidence
+                and not self.completion.waiver_reason
+            ):
+                raise ValueError("completed assured tasks require condition evidence or a waiver")
+            if (
+                self.rigor is TaskRigor.ASSURED
+                and self.completion.assurance_reviewed_at is None
+                and not self.completion.waiver_reason
+                and not self.completion.assurance_grandfathered
+            ):
+                raise ValueError(
+                    "completed assured tasks require constraints and assumptions review or a waiver"
+                )
+            if (
+                self.rigor is TaskRigor.ASSURED
+                and self.completion.assurance_reviewed_at is not None
+                and self.completion.assurance_review_hash != self.assurance_input_hash()
+                and not self.completion.waiver_reason
+                and not self.completion.assurance_grandfathered
+            ):
+                raise ValueError(
+                    "assured task review no longer matches constraints and assumptions"
+                )
+        if self.lifecycle is TaskLifecycle.OPEN and self.resolution is not None:
+            raise ValueError("open tasks cannot have a resolution")
+        if self.rigor in {TaskRigor.STANDARD, TaskRigor.ASSURED}:
+            if not self.goal:
+                raise ValueError(f"{self.rigor.value} tasks require goal")
+            if not self.completion.conditions:
+                raise ValueError(
+                    f"{self.rigor.value} tasks require at least one completion condition"
+                )
         return self
+
+    @computed_field
+    @property
+    def status(self) -> TaskStatus:
+        if self.lifecycle is TaskLifecycle.COMPLETED:
+            return TaskStatus.DONE
+        if self.lifecycle is TaskLifecycle.CANCELLED:
+            return TaskStatus.CANCELLED
+        if self.execution.state is ExecutionState.DOING:
+            return TaskStatus.DOING
+        if any(blocker.resolved_at is None for blocker in self.blockers):
+            return TaskStatus.BLOCKED
+        if self.disposition is TaskDisposition.WAITING:
+            return TaskStatus.WAITING
+        if self.disposition is TaskDisposition.CALENDAR:
+            return TaskStatus.SCHEDULED
+        return TaskStatus.NEXT
+
+    @computed_field
+    @property
+    def estimate_minutes(self) -> int | None:
+        return self.original_estimate_minutes
+
+    @computed_field
+    @property
+    def not_before(self) -> datetime | None:
+        return self.schedule.not_before
+
+    @computed_field
+    @property
+    def due_on(self) -> date | None:
+        return self.schedule.due_on
+
+    @computed_field
+    @property
+    def scheduled_for(self) -> datetime | None:
+        return self.schedule.scheduled_for
+
+    @computed_field
+    @property
+    def waiting_for(self) -> str | None:
+        return self.waiting.target if self.waiting else None
+
+    @computed_field
+    @property
+    def follow_up_on(self) -> date | None:
+        return self.waiting.follow_up_on if self.waiting else None
+
+    @computed_field
+    @property
+    def blocked_reason(self) -> str | None:
+        return next(
+            (blocker.description for blocker in self.blockers if blocker.resolved_at is None),
+            None,
+        )
+
+    @computed_field
+    @property
+    def started_at(self) -> datetime | None:
+        return self.execution.started_at
+
+    @computed_field
+    @property
+    def completion_criteria(self) -> list[str]:
+        return [condition.text for condition in self.completion.conditions]
+
+    @computed_field
+    @property
+    def next_occurrence_on(self) -> date | None:
+        if self.recurrence is None:
+            return None
+        return self.recurrence.next_after(self.occurrence_on or self.recurrence.anchor_on)
+
+    def persistent_dict(self) -> dict[str, Any]:
+        return self.model_dump(
+            mode="json",
+            exclude_none=True,
+            exclude_computed_fields=True,
+        )
+
+    def assurance_input_hash(self) -> str:
+        payload = {
+            "constraints": self.constraints,
+            "assumptions": [assumption.model_dump(mode="json") for assumption in self.assumptions],
+        }
+        encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
 
 
 class GtdProject(StrictModel):
@@ -192,6 +693,7 @@ class CompletionResult(StrictModel):
     task: Task
     project_attention_required: bool = False
     project_id: str | None = None
+    next_occurrence: Task | None = None
 
 
 class StatusReport(StrictModel):

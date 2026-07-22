@@ -24,7 +24,7 @@ project計画・Confluence公開まで一貫して扱えるlocal-first systemを
 
 - `main` はGitHub上のinitial commitを基点とする。
 - integration branchは `dev/work-smarter-v1`、実装sliceは `feat/*` とする。
-- GTD MVPの基礎実装と43 testsは `feat/foundation` へ導入中である。
+- GTD foundationとrigorous Task schema v3は実装済みで、82 testsが通過している。
 - source of truthはMarkdown frontmatterとappend-only audit eventである。
 
 ### Inferences
@@ -69,20 +69,23 @@ main
 - [x] 43 tests、85% coverage、wheel smoke test
 - [x] repository instructionsとdocs routing
 - [x] foundation commit
-- [ ] `dev/work-smarter-v1`へのmerge
+- [x] `dev/work-smarter-v1`へのmerge
 
 ### M1 GTD ticket model — `feat/gtd-ticket-model`
 
-- [ ] work type: action / decision / investigation / communication / routine
-- [ ] goal / why / desired outcome
-- [ ] constraints / assumptions / risks
-- [ ] definition of done / acceptance criteria / evidence
-- [ ] priorityを直接順位ではなくurgency・impact・commitmentで表現
-- [ ] parent / depends-on / blocks / relates-to links
-- [ ] estimate / remaining / actual work log
-- [ ] recurring ruleとnext occurrence
-- [ ] schema migration 1→2
-- [ ] ticket create/show/edit/link CLI/API
+- Current branch: `feat/gtd-ticket-model`
+- Status: COMPLETE
+
+- [x] work type: action / decision / investigation / communication / routine
+- [x] goal / why / desired outcome
+- [x] constraints / assumptions / risks
+- [x] definition of done / acceptance criteria / evidence
+- [x] priorityを直接順位ではなくurgency・impact・commitmentで表現
+- [x] parent / depends-on / blocks / relates-to links
+- [x] estimate / remaining / actual work log
+- [x] recurring ruleとnext occurrence
+- [x] schema migration 1/2→3
+- [x] ticket create/show/edit/link CLI/API
 
 ### M2 GTD workflow — `feat/gtd-workflow`
 

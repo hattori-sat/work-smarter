@@ -28,21 +28,33 @@ Project management featureは `gtd/projects/` を再利用しない。
 
 ```markdown
 ---
-schema_version: 1
+schema_version: 3
 id: TASK-20260723-102030-A1B2C3
 kind: task
+revision: 1
+work_type: action
+rigor: standard
 title: 失敗するtestを1本書く
-status: next
+goal: parserの境界条件を実行可能な仕様にする
+lifecycle: open
+disposition: next
+execution:
+  state: idle
 created_at: '2026-07-23T01:20:30Z'
 updated_at: '2026-07-23T01:20:30Z'
 source_inbox_id: IN-20260723-102025-D4E5F6
 contexts:
 - '@computer'
 energy: high
-estimate_minutes: 20
+original_estimate_minutes: 20
+remaining_estimate_minutes: 20
 actual_minutes: 0
-completion_criteria:
-- testが意図した理由で失敗する
+schedule: {}
+completion:
+  obvious: false
+  conditions:
+  - id: CC-1
+    text: testが意図した理由で失敗する
 tags:
 - parser
 ---
@@ -73,7 +85,8 @@ Rules:
 ws doctor
 ```
 
-doctorはschema、duplicate ID、filename/ID、kind/directory、missing project、WIP、監査logを検証する。
+doctorはschema、duplicate ID、filename/ID、kind/directory、missing relation/project、dependency cycle、
+work-log projection、WIP、監査logを検証する。
 状態遷移の監査を残したい変更はCLI/APIから行う。
 
 ## Templates
@@ -105,5 +118,6 @@ doctorはschema、duplicate ID、filename/ID、kind/directory、missing project�
 
 ## Compatibility
 
-`schema_version: 1` 以外のmigration policyはまだUNKNOWNである。未対応versionを自動変換せず、将来の
-migration commandで明示的に更新する。
+Task schema v1/v2はread時にv3へlazy migrationし、次回writeでv3として保存する。既に完了済みの
+v2 rigorous taskは新しいassurance gateで読めなくならないよう、frontmatterにgrandfather markerを
+明示する。その他entityと未対応versionは自動推測せずvalidation errorにする。

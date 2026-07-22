@@ -116,3 +116,93 @@ def test_cli_noninteractive_clarify_never_prompts_for_missing_fields(
     assert result.exit_code == 2
     assert "--outcome is required" in result.output
     assert "Successful outcome" not in result.output
+
+
+def test_cli_task_define_and_show_expose_personal_work_rigor(tmp_path: Path) -> None:
+    common = ["--workspace", str(tmp_path)]
+    runner.invoke(app, [*common, "init"])
+    added = runner.invoke(app, [*common, "--json", "add", "Review the design"])
+    task_id = json.loads(added.stdout)["created"][0]["id"]
+
+    defined = runner.invoke(
+        app,
+        [
+            *common,
+            "--json",
+            "task",
+            "define",
+            task_id,
+            "--type",
+            "communication",
+            "--rigor",
+            "standard",
+            "--goal",
+            "Obtain an explicit review decision",
+            "--why",
+            "Unresolved interfaces make implementation unsafe",
+            "--constraint",
+            "Use sanitized material",
+            "--assumption",
+            "Reviewers can access the proposal",
+            "--criterion",
+            "Decision and actions are recorded",
+        ],
+    )
+    assert defined.exit_code == 0, defined.output
+    assert json.loads(defined.stdout)["rigor"] == "standard"
+
+    shown = runner.invoke(app, [*common, "--json", "task", "show", task_id[:14]])
+    assert shown.exit_code == 0, shown.output
+    ticket = json.loads(shown.stdout)
+    assert ticket["goal"] == "Obtain an explicit review decision"
+    assert ticket["constraints"] == ["Use sanitized material"]
+
+
+def test_cli_task_logs_estimates_and_recurrence_without_file_editing(tmp_path: Path) -> None:
+    common = ["--workspace", str(tmp_path)]
+    runner.invoke(app, [*common, "init"])
+    added = runner.invoke(
+        app,
+        [*common, "--json", "add", "Review access permissions", "--estimate", "45"],
+    )
+    task_id = json.loads(added.stdout)["created"][0]["id"]
+
+    logged = runner.invoke(
+        app,
+        [*common, "--json", "task", "log", task_id, "10", "--note", "First pass"],
+    )
+    assert logged.exit_code == 0, logged.output
+    assert json.loads(logged.stdout)["actual_minutes"] == 10
+
+    estimated = runner.invoke(
+        app,
+        [
+            *common,
+            "--json",
+            "task",
+            "estimate",
+            task_id,
+            "20",
+            "--reason",
+            "Second system added",
+        ],
+    )
+    assert estimated.exit_code == 0, estimated.output
+    assert json.loads(estimated.stdout)["remaining_estimate_minutes"] == 20
+
+    repeated = runner.invoke(
+        app,
+        [
+            *common,
+            "--json",
+            "task",
+            "repeat",
+            task_id,
+            "--frequency",
+            "weekly",
+            "--anchor",
+            "2026-07-23",
+        ],
+    )
+    assert repeated.exit_code == 0, repeated.output
+    assert json.loads(repeated.stdout)["next_occurrence_on"] == "2026-07-30"
