@@ -69,9 +69,12 @@ main
 - [x] 43 tests、85% coverage、wheel smoke test
 - [x] repository instructionsとdocs routing
 - [x] foundation commit
-- [ ] `dev/work-smarter-v1`へのmerge
+- [x] `dev/work-smarter-v1`へのmerge
 
 ### M1 GTD ticket model — `feat/gtd-ticket-model`
+
+- Current branch: `feat/gtd-ticket-model`
+- Status: IN PROGRESS
 
 - [ ] work type: action / decision / investigation / communication / routine
 - [ ] goal / why / desired outcome

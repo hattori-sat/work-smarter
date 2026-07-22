@@ -223,7 +223,15 @@ class Workspace:
 
     def write(self, entity: EntityT, body: str = "") -> EntityRecord[EntityT]:
         path = self.path_for(entity)
-        write_markdown(path, entity.model_dump(mode="json", exclude_none=True), body)
+        write_markdown(
+            path,
+            entity.model_dump(
+                mode="json",
+                exclude_none=True,
+                exclude_computed_fields=True,
+            ),
+            body,
+        )
         return EntityRecord(entity=entity, body=body, path=path)
 
     def read(
