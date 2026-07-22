@@ -156,6 +156,31 @@ def test_v2_completed_assured_task_is_grandfathered_during_v3_migration() -> Non
     assert task.completion.assurance_grandfathered is True
 
 
+def test_v2_grandfathering_does_not_hide_unmet_completion_conditions() -> None:
+    completed_at = datetime.now(UTC)
+
+    with pytest.raises(ValueError, match="every condition"):
+        Task.model_validate(
+            {
+                "schema_version": 2,
+                "id": "TASK-V2-INVALID",
+                "kind": "task",
+                "rigor": "assured",
+                "title": "Invalid historic completion",
+                "goal": "Remain invalid",
+                "lifecycle": "completed",
+                "disposition": "next",
+                "execution": {"state": "idle"},
+                "completion": {
+                    "obvious": False,
+                    "conditions": [{"id": "CC-1", "text": "Still unmet"}],
+                },
+                "completed_at": completed_at,
+                "resolution": "completed",
+            }
+        )
+
+
 def test_assured_ticket_needs_evidence_before_completion(
     service: GtdService,
 ) -> None:
@@ -591,6 +616,43 @@ def test_retry_repairs_a_missing_recurring_successor_after_partial_failure(
         if task.recurrence_series_id == task_id and task.id != task_id
     ]
     assert [task.id for task in successors] == [repaired.next_occurrence.id]
+
+
+def test_retry_backfills_a_missing_recurrence_audit_event(
+    service: GtdService,
+    workspace: Workspace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    task_id = service.add_next_action("Run the audited review").created[0].id
+    service.set_recurrence(
+        task_id,
+        frequency="weekly",
+        anchor_on=date(2026, 7, 23),
+    )
+    original_event = service._event
+    failed = False
+
+    def fail_recurrence_event(event_type: EventType, **kwargs: object):
+        nonlocal failed
+        if event_type is EventType.TASK_RECURRENCE_CREATED and not failed:
+            failed = True
+            raise OSError("simulated recurrence event failure")
+        return original_event(event_type, **kwargs)
+
+    monkeypatch.setattr(service, "_event", fail_recurrence_event)
+    with pytest.raises(OSError, match="event failure"):
+        service.complete_task(task_id)
+    monkeypatch.setattr(service, "_event", original_event)
+
+    repaired = service.complete_task(task_id)
+    assert repaired.next_occurrence is not None
+    events = [
+        event
+        for event in workspace.event_store.read_all()
+        if event.type == EventType.TASK_RECURRENCE_CREATED
+        and event.entity_id == repaired.next_occurrence.id
+    ]
+    assert len(events) == 1
 
 
 def test_resolving_a_blocker_does_not_destroy_waiting_context(

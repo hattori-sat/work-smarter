@@ -390,10 +390,11 @@ class Task(StrictModel):
             data = dict(value)
             data["schema_version"] = 3
             completion = dict(data.get("completion") or {})
-            if data.get("lifecycle") == TaskLifecycle.COMPLETED and data.get("rigor") in {
-                TaskRigor.STANDARD,
-                TaskRigor.ASSURED,
-            }:
+            if (
+                data.get("lifecycle") == TaskLifecycle.COMPLETED
+                and data.get("rigor") == TaskRigor.ASSURED
+                and not completion.get("assurance_reviewed_at")
+            ):
                 completion["assurance_grandfathered"] = True
             data["completion"] = completion
             return data
@@ -501,7 +502,6 @@ class Task(StrictModel):
                 self.rigor in {TaskRigor.STANDARD, TaskRigor.ASSURED}
                 and unmet
                 and not self.completion.waiver_reason
-                and not self.completion.assurance_grandfathered
             ):
                 raise ValueError("completed rigorous tasks require every condition or a waiver")
             missing_evidence = [
@@ -513,7 +513,6 @@ class Task(StrictModel):
                 self.rigor is TaskRigor.ASSURED
                 and missing_evidence
                 and not self.completion.waiver_reason
-                and not self.completion.assurance_grandfathered
             ):
                 raise ValueError("completed assured tasks require condition evidence or a waiver")
             if (

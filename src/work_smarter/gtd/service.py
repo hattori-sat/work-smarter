@@ -1357,6 +1357,7 @@ class GtdService:
             None,
         )
         if existing is not None:
+            self._ensure_recurrence_created_event(existing, completed, next_on)
             return existing
         now = utc_now()
         completion = CompletionDefinition(
@@ -1397,6 +1398,23 @@ class GtdService:
             next_task,
             self._task_body(self._recurring_intent(completed_record.body, completed.title)),
         )
+        self._ensure_recurrence_created_event(next_task, completed, next_on)
+        return next_task
+
+    def _ensure_recurrence_created_event(
+        self,
+        next_task: Task,
+        completed: Task,
+        next_on: date,
+    ) -> None:
+        already_recorded = any(
+            event.type == EventType.TASK_RECURRENCE_CREATED
+            and event.entity_id == next_task.id
+            and event.payload.get("previous_task_id") == completed.id
+            for event in self.events.read_all()
+        )
+        if already_recorded:
+            return
         self._event(
             EventType.TASK_RECURRENCE_CREATED,
             entity_id=next_task.id,
@@ -1406,7 +1424,6 @@ class GtdService:
                 "occurrence_on": next_on.isoformat(),
             },
         )
-        return next_task
 
     @staticmethod
     def _recurring_intent(body: str, fallback: str) -> str:
