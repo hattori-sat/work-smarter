@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time
 from pathlib import Path
 from typing import Any, cast
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from pydantic import ValidationError
 
@@ -17,6 +18,7 @@ from work_smarter.errors import (
     WipLimitError,
 )
 from work_smarter.gtd.events import EventType
+from work_smarter.gtd.metrics import project_metrics
 from work_smarter.gtd.models import (
     ArchivedInboxItem,
     Assumption,
@@ -26,6 +28,8 @@ from work_smarter.gtd.models import (
     CompletionCondition,
     CompletionDefinition,
     CompletionResult,
+    CompletionSnapshot,
+    DailyDashboard,
     Energy,
     EntityRef,
     ExecutionState,
@@ -39,8 +43,10 @@ from work_smarter.gtd.models import (
     RecurrenceRule,
     Reference,
     RelationType,
+    ReviewChecklistItem,
     ReviewItem,
     ReviewReport,
+    ReviewStepState,
     SomedayItem,
     StatusReport,
     Task,
@@ -57,7 +63,12 @@ from work_smarter.gtd.models import (
     ValidationIssue,
     ValidationReport,
     WaitingDetail,
+    WaitingInteraction,
+    WaitingInteractionKind,
+    WeeklyReviewSession,
+    WeeklyReviewStep,
     WorkLog,
+    WorkLogCorrection,
     WorkLogSource,
     WorkType,
     utc_now,
@@ -83,10 +94,26 @@ COMMITMENT_RANK = {
     Commitment.COMMITTED: 3,
 }
 
+WEEKLY_REVIEW_LABELS = {
+    WeeklyReviewStep.INBOX_ZERO: "Clarify inbox to zero",
+    WeeklyReviewStep.CALENDAR_REVIEWED: "Review calendar and date commitments",
+    WeeklyReviewStep.WAITING_REVIEWED: "Review waiting-for and follow-ups",
+    WeeklyReviewStep.PROJECTS_REVIEWED: "Ensure every active project has a next action",
+    WeeklyReviewStep.SOMEDAY_REVIEWED: "Review Someday/Maybe",
+}
+
 
 def _new_id(prefix: str) -> str:
     timestamp = utc_now().strftime("%Y%m%d-%H%M%S")
     return f"{prefix}-{timestamp}-{uuid4().hex[:6].upper()}"
+
+
+def _next_sequence_id(prefix: str, existing_ids: Iterable[str]) -> str:
+    existing = set(existing_ids)
+    sequence = 1
+    while f"{prefix}-{sequence}" in existing:
+        sequence += 1
+    return f"{prefix}-{sequence}"
 
 
 def _title_from_text(text: str) -> str:
@@ -383,13 +410,17 @@ class GtdService:
         self._event(
             EventType.CLARIFIED,
             entity_id=item.id,
-            payload={"decision": choice.value, "result_ids": archived.result_ids},
+            payload={
+                "decision": choice.value,
+                "result_ids": archived.result_ids,
+                "handling": ("two_minute" if choice is ClarifyDecision.DONE else "normal"),
+            },
         )
         if choice is ClarifyDecision.DONE and refs:
             self._event(
                 EventType.TASK_COMPLETED,
                 entity_id=refs[0].id,
-                payload={"completed_during_clarify": True},
+                payload={"completed_during_clarify": True, "two_minute_rule": True},
             )
         return ClarifyResult(
             source_id=item.id,
@@ -554,6 +585,49 @@ class GtdService:
         except ValidationError as exc:
             raise InvalidTransitionError(str(exc)) from exc
 
+    @staticmethod
+    def _evolve_waiting(waiting: WaitingDetail, **updates: Any) -> WaitingDetail:
+        data = waiting.model_dump(mode="json", exclude_none=True)
+        data.update(updates)
+        try:
+            return WaitingDetail.model_validate(data)
+        except ValidationError as exc:
+            raise InvalidTransitionError(str(exc)) from exc
+
+    @staticmethod
+    def _waiting_interaction(
+        waiting: WaitingDetail,
+        *,
+        kind: WaitingInteractionKind,
+        note: str | None,
+        occurred_at: datetime,
+        party: str | None = None,
+        next_follow_up_on: date | str | None = None,
+    ) -> WaitingInteraction:
+        try:
+            return WaitingInteraction(
+                id=_next_sequence_id(
+                    "INT",
+                    (interaction.id for interaction in waiting.interactions),
+                ),
+                kind=kind,
+                occurred_at=occurred_at,
+                note=note,
+                party=party,
+                next_follow_up_on=next_follow_up_on,
+            )
+        except ValidationError as exc:
+            raise InvalidTransitionError(str(exc)) from exc
+
+    @staticmethod
+    def _evolve_schedule(schedule: TaskSchedule, **updates: Any) -> TaskSchedule:
+        data = schedule.model_dump(mode="json", exclude_none=True)
+        data.update(updates)
+        try:
+            return TaskSchedule.model_validate(data)
+        except ValidationError as exc:
+            raise InvalidTransitionError(str(exc)) from exc
+
     def get_task(self, task_id: str) -> Task:
         return self._task_record(task_id).entity
 
@@ -709,6 +783,72 @@ class GtdService:
                 stopped_at=stopped_at,
             )
 
+    @staticmethod
+    def _effective_work_log_minutes(task: Task) -> dict[str, float]:
+        effective = {log.id: log.minutes for log in GtdService._logs_with_legacy_actual(task)}
+        for correction in task.work_log_corrections:
+            effective[correction.work_log_id] = correction.corrected_minutes
+        return effective
+
+    def correct_work_log(
+        self,
+        task_id: str,
+        work_log_id: str,
+        *,
+        corrected_minutes: float,
+        reason: str,
+    ) -> Task:
+        """Append an auditable correction without rewriting the original work log."""
+
+        clean_reason = reason.strip()
+        if corrected_minutes < 0:
+            raise InvalidTransitionError("Corrected work-log minutes cannot be negative")
+        if not clean_reason:
+            raise InvalidTransitionError("Correcting a work log requires a reason")
+        with self.workspace.lock():
+            record = self._task_record(task_id)
+            task = record.entity
+            effective = self._effective_work_log_minutes(task)
+            previous = effective.get(work_log_id)
+            if previous is None:
+                raise EntityNotFoundError(f"No work log {work_log_id!r} on {task.id}")
+            if abs(previous - corrected_minutes) <= 0.000001:
+                raise InvalidTransitionError(
+                    f"Work log {work_log_id} is already {corrected_minutes} minutes"
+                )
+            correction = WorkLogCorrection(
+                id=_new_id("WLC"),
+                work_log_id=work_log_id,
+                previous_minutes=previous,
+                corrected_minutes=corrected_minutes,
+                reason=clean_reason,
+            )
+            effective[work_log_id] = corrected_minutes
+            updated = self._evolve_task(
+                task,
+                actual_minutes=round(sum(effective.values()), 2),
+                work_log_corrections=[
+                    *(
+                        item.model_dump(mode="json", exclude_none=True)
+                        for item in task.work_log_corrections
+                    ),
+                    correction.model_dump(mode="json", exclude_none=True),
+                ],
+            )
+            self._write_task(record, updated)
+            self._event(
+                EventType.TASK_WORK_LOG_CORRECTED,
+                entity_id=task.id,
+                payload={
+                    "correction_id": correction.id,
+                    "work_log_id": correction.work_log_id,
+                    "from_minutes": correction.previous_minutes,
+                    "to_minutes": correction.corrected_minutes,
+                    "reason": correction.reason,
+                },
+            )
+            return updated
+
     def _append_work_log(
         self,
         record: EntityRecord[Task],
@@ -724,8 +864,9 @@ class GtdService:
         if minutes <= 0:
             raise InvalidTransitionError("Work log minutes must be greater than zero")
         existing_logs = self._logs_with_legacy_actual(task)
+        effective_existing = self._effective_work_log_minutes(task)
         log = WorkLog(
-            id=f"WL-{len(existing_logs) + 1}",
+            id=_next_sequence_id("WL", (item.id for item in existing_logs)),
             minutes=max(round(minutes, 6), 0.000001),
             source=source,
             note=note.strip() if note else None,
@@ -737,7 +878,7 @@ class GtdService:
             remaining = max(0, round(remaining - log.minutes, 2))
         updates: dict[str, Any] = {
             "actual_minutes": round(
-                sum(item.minutes for item in [*existing_logs, log]),
+                sum(effective_existing.values()) + log.minutes,
                 2,
             ),
             "remaining_estimate_minutes": remaining,
@@ -839,6 +980,376 @@ class GtdService:
                 EventType.TASK_RECURRENCE_SET,
                 entity_id=task.id,
                 payload=rule.model_dump(mode="json", exclude_none=True),
+            )
+            return updated
+
+    @staticmethod
+    def _require_open(task: Task, operation: str) -> None:
+        if task.lifecycle is not TaskLifecycle.OPEN:
+            raise InvalidTransitionError(
+                f"Cannot {operation} {task.id} while it is {task.lifecycle.value}"
+            )
+
+    def delegate_task(
+        self,
+        task_id: str,
+        *,
+        target: str,
+        request: str | None = None,
+        target_kind: str = "person",
+        expected_on: date | str | None = None,
+        follow_up_on: date | str | None = None,
+        escalation_on: date | str | None = None,
+        escalation_to: str | None = None,
+    ) -> Task:
+        """Delegate an open action without losing its blocker or due-date facets."""
+
+        with self.workspace.lock():
+            record = self._task_record(task_id)
+            task = record.entity
+            self._require_open(task, "delegate")
+            if task.waiting is not None:
+                raise InvalidTransitionError(
+                    f"Task {task.id} is already delegated; follow up or resolve it"
+                )
+            if task.status is TaskStatus.DOING:
+                task = self._stop_task_unlocked(task.id)
+                record = self._task_record(task.id)
+            now = utc_now()
+            clean_request = request.strip() if request and request.strip() else None
+            waiting_id = _new_id("WAIT")
+            try:
+                delegated_interaction = WaitingInteraction(
+                    id="INT-1",
+                    kind=WaitingInteractionKind.DELEGATED,
+                    occurred_at=now,
+                    note=clean_request,
+                )
+                waiting = WaitingDetail(
+                    id=waiting_id,
+                    target_kind=target_kind,
+                    target=target,
+                    request=clean_request,
+                    delegated_at=now,
+                    expected_on=expected_on,
+                    follow_up_on=follow_up_on,
+                    escalation_on=escalation_on,
+                    escalation_to=escalation_to,
+                    interactions=[delegated_interaction],
+                )
+            except ValidationError as exc:
+                raise InvalidTransitionError(str(exc)) from exc
+            schedule = task.schedule.model_copy(update={"scheduled_for": None})
+            updated = self._evolve_task(
+                task,
+                disposition=TaskDisposition.WAITING,
+                waiting=waiting.model_dump(mode="json", exclude_none=True),
+                schedule=schedule.model_dump(mode="json", exclude_none=True),
+            )
+            self._write_task(record, updated)
+            self._event(
+                EventType.TASK_DELEGATED,
+                entity_id=task.id,
+                payload={
+                    "waiting_id": waiting.id,
+                    "target": waiting.target,
+                    "request": waiting.request,
+                    "delegated_at": waiting.delegated_at.isoformat(),
+                    "expected_on": (
+                        waiting.expected_on.isoformat() if waiting.expected_on else None
+                    ),
+                    "follow_up_on": (
+                        waiting.follow_up_on.isoformat() if waiting.follow_up_on else None
+                    ),
+                    "escalation_on": (
+                        waiting.escalation_on.isoformat() if waiting.escalation_on else None
+                    ),
+                    "escalation_to": waiting.escalation_to,
+                },
+            )
+            return updated
+
+    def follow_up_waiting(
+        self,
+        task_id: str,
+        *,
+        note: str,
+        next_follow_up_on: date | str | None = None,
+    ) -> Task:
+        with self.workspace.lock():
+            record = self._task_record(task_id)
+            task = record.entity
+            waiting = task.waiting
+            if (
+                task.lifecycle is not TaskLifecycle.OPEN
+                or task.disposition is not TaskDisposition.WAITING
+                or waiting is None
+            ):
+                raise InvalidTransitionError(f"Task {task.id} is not waiting for a response")
+            now = utc_now()
+            interaction = self._waiting_interaction(
+                waiting,
+                kind=WaitingInteractionKind.FOLLOW_UP,
+                occurred_at=now,
+                note=note,
+                next_follow_up_on=next_follow_up_on,
+            )
+            updated_waiting = self._evolve_waiting(
+                waiting,
+                last_followed_up_at=now,
+                follow_up_on=next_follow_up_on,
+                interactions=[*waiting.interactions, interaction],
+            )
+            updated = self._evolve_task(
+                task,
+                waiting=updated_waiting.model_dump(mode="json", exclude_none=True),
+            )
+            self._write_task(record, updated)
+            self._event(
+                EventType.TASK_WAITING_FOLLOWED_UP,
+                entity_id=task.id,
+                payload={
+                    "waiting_id": waiting.id,
+                    "scheduled_on": (
+                        waiting.follow_up_on.isoformat() if waiting.follow_up_on else None
+                    ),
+                    "note": interaction.note,
+                    "next_follow_up_on": (
+                        interaction.next_follow_up_on.isoformat()
+                        if interaction.next_follow_up_on
+                        else None
+                    ),
+                },
+            )
+            return updated
+
+    def escalate_waiting(
+        self,
+        task_id: str,
+        *,
+        note: str,
+        escalation_to: str | None = None,
+        next_escalation_on: date | str | None = None,
+    ) -> Task:
+        with self.workspace.lock():
+            record = self._task_record(task_id)
+            task = record.entity
+            waiting = task.waiting
+            if (
+                task.lifecycle is not TaskLifecycle.OPEN
+                or task.disposition is not TaskDisposition.WAITING
+                or waiting is None
+            ):
+                raise InvalidTransitionError(f"Task {task.id} is not waiting for a response")
+            target = (escalation_to or waiting.escalation_to or "").strip()
+            if not target:
+                raise InvalidTransitionError("Escalation requires escalation_to")
+            now = utc_now()
+            interaction = self._waiting_interaction(
+                waiting,
+                kind=WaitingInteractionKind.ESCALATED,
+                occurred_at=now,
+                note=note,
+                party=target,
+            )
+            updated_waiting = self._evolve_waiting(
+                waiting,
+                escalation_to=target,
+                escalation_on=next_escalation_on,
+                last_escalated_at=now,
+                interactions=[*waiting.interactions, interaction],
+            )
+            updated = self._evolve_task(
+                task,
+                waiting=updated_waiting.model_dump(mode="json", exclude_none=True),
+            )
+            self._write_task(record, updated)
+            self._event(
+                EventType.TASK_ESCALATED,
+                entity_id=task.id,
+                payload={
+                    "waiting_id": waiting.id,
+                    "scheduled_on": (
+                        waiting.escalation_on.isoformat() if waiting.escalation_on else None
+                    ),
+                    "escalation_to": target,
+                    "next_escalation_on": (
+                        updated_waiting.escalation_on.isoformat()
+                        if updated_waiting.escalation_on
+                        else None
+                    ),
+                    "note": interaction.note,
+                },
+            )
+            return updated
+
+    def record_waiting_response(
+        self,
+        task_id: str,
+        *,
+        note: str,
+        resolved: bool,
+        next_follow_up_on: date | str | None = None,
+    ) -> Task:
+        with self.workspace.lock():
+            record = self._task_record(task_id)
+            task = record.entity
+            waiting = task.waiting
+            if (
+                task.lifecycle is not TaskLifecycle.OPEN
+                or task.disposition is not TaskDisposition.WAITING
+                or waiting is None
+            ):
+                raise InvalidTransitionError(f"Task {task.id} is not waiting for a response")
+            if resolved and next_follow_up_on is not None:
+                raise InvalidTransitionError(
+                    "A resolved waiting response cannot schedule another follow-up"
+                )
+            now = utc_now()
+            interaction = self._waiting_interaction(
+                waiting,
+                kind=WaitingInteractionKind.RESPONSE,
+                occurred_at=now,
+                note=note,
+                next_follow_up_on=next_follow_up_on,
+            )
+            interactions = [*waiting.interactions, interaction]
+            updates: dict[str, Any]
+            if resolved:
+                resolved_waiting = self._evolve_waiting(
+                    waiting,
+                    interactions=interactions,
+                    resolved_at=now,
+                    resolution_note=interaction.note,
+                )
+                updates = {
+                    "disposition": TaskDisposition.NEXT,
+                    "waiting": None,
+                    "waiting_history": [
+                        *(
+                            item.model_dump(mode="json", exclude_none=True)
+                            for item in task.waiting_history
+                        ),
+                        resolved_waiting.model_dump(mode="json", exclude_none=True),
+                    ],
+                }
+            else:
+                updated_waiting = self._evolve_waiting(
+                    waiting,
+                    interactions=interactions,
+                    follow_up_on=next_follow_up_on,
+                )
+                updates = {"waiting": updated_waiting.model_dump(mode="json", exclude_none=True)}
+            updated = self._evolve_task(task, **updates)
+            self._write_task(record, updated)
+            self._event(
+                EventType.TASK_RESPONSE_RECORDED,
+                entity_id=task.id,
+                payload={
+                    "waiting_id": waiting.id,
+                    "resolved": resolved,
+                    "note": interaction.note,
+                    "next_follow_up_on": (
+                        interaction.next_follow_up_on.isoformat()
+                        if interaction.next_follow_up_on
+                        else None
+                    ),
+                },
+            )
+            if resolved:
+                self._event(
+                    EventType.TASK_WAITING_RESOLVED,
+                    entity_id=task.id,
+                    payload={
+                        "waiting_id": waiting.id,
+                        "outcome": interaction.note,
+                    },
+                )
+            return updated
+
+    def schedule_task(
+        self,
+        task_id: str,
+        *,
+        scheduled_for: datetime | str,
+    ) -> Task:
+        with self.workspace.lock():
+            record = self._task_record(task_id)
+            task = record.entity
+            self._require_open(task, "schedule")
+            if task.waiting is not None:
+                raise InvalidTransitionError("Resolve waiting before scheduling the task")
+            if task.status is TaskStatus.DOING:
+                task = self._stop_task_unlocked(task.id)
+                record = self._task_record(task.id)
+            schedule = self._evolve_schedule(
+                task.schedule,
+                scheduled_for=scheduled_for,
+            )
+            updated = self._evolve_task(
+                task,
+                disposition=TaskDisposition.CALENDAR,
+                schedule=schedule.model_dump(mode="json", exclude_none=True),
+            )
+            self._write_task(record, updated)
+            self._event(
+                EventType.TASK_SCHEDULED,
+                entity_id=task.id,
+                payload={"scheduled_for": schedule.scheduled_for.isoformat()},
+            )
+            return updated
+
+    def defer_task(
+        self,
+        task_id: str,
+        *,
+        not_before: datetime | str,
+    ) -> Task:
+        with self.workspace.lock():
+            record = self._task_record(task_id)
+            task = record.entity
+            self._require_open(task, "defer")
+            if task.waiting is not None:
+                raise InvalidTransitionError("Resolve waiting before deferring the task")
+            if task.status is TaskStatus.DOING:
+                task = self._stop_task_unlocked(task.id)
+                record = self._task_record(task.id)
+            schedule = self._evolve_schedule(
+                task.schedule,
+                not_before=not_before,
+            )
+            updated = self._evolve_task(
+                task,
+                schedule=schedule.model_dump(mode="json", exclude_none=True),
+            )
+            self._write_task(record, updated)
+            self._event(
+                EventType.TASK_DEFERRED,
+                entity_id=task.id,
+                payload={"not_before": schedule.not_before.isoformat()},
+            )
+            return updated
+
+    def set_task_due(
+        self,
+        task_id: str,
+        *,
+        due_on: date | str | None,
+    ) -> Task:
+        with self.workspace.lock():
+            record = self._task_record(task_id)
+            task = record.entity
+            self._require_open(task, "set a due date on")
+            schedule = self._evolve_schedule(task.schedule, due_on=due_on)
+            updated = self._evolve_task(
+                task,
+                schedule=schedule.model_dump(mode="json", exclude_none=True),
+            )
+            self._write_task(record, updated)
+            self._event(
+                EventType.TASK_DUE_SET,
+                entity_id=task.id,
+                payload={"due_on": schedule.due_on.isoformat() if schedule.due_on else None},
             )
             return updated
 
@@ -1032,6 +1543,7 @@ class GtdService:
         contexts: Iterable[str] | None = None,
         available_minutes: int | None = None,
         energy: Energy | str | None = None,
+        as_of: datetime | None = None,
     ) -> list[Task]:
         current = self.current_task()
         if current is not None:
@@ -1039,7 +1551,7 @@ class GtdService:
 
         requested_contexts = set(_normalize_tags(contexts))
         available_energy = Energy(energy) if energy is not None else None
-        now = utc_now()
+        now = _ensure_aware(as_of) if as_of is not None else utc_now()
         candidates: list[Task] = []
         for task in self.list_tasks():
             is_ready_scheduled = (
@@ -1107,6 +1619,53 @@ class GtdService:
             },
             ready_actions=[self._entity_ref(task) for task in self.focus()[:5]],
             projects_needing_action=[self._entity_ref(project) for project in needs_action],
+        )
+
+    def daily_dashboard(self, *, today: date | None = None) -> DailyDashboard:
+        timezone = ZoneInfo(self.workspace.settings().timezone)
+        day = today or utc_now().astimezone(timezone).date()
+        tasks = [task for task in self.list_tasks() if task.lifecycle is TaskLifecycle.OPEN]
+
+        def refs(items: Iterable[Task]) -> list[EntityRef]:
+            ordered = sorted(items, key=lambda item: item.created_at)
+            return [self._entity_ref(task) for task in ordered]
+
+        overdue = [task for task in tasks if task.due_on is not None and task.due_on < day]
+        due_today = [task for task in tasks if task.due_on == day]
+        follow_ups = [
+            task
+            for task in tasks
+            if task.waiting is not None
+            and (task.waiting.follow_up_on is None or task.waiting.follow_up_on <= day)
+        ]
+        escalations = [
+            task
+            for task in tasks
+            if task.waiting is not None
+            and task.waiting.escalation_on is not None
+            and task.waiting.escalation_on <= day
+        ]
+        scheduled = [
+            task
+            for task in tasks
+            if task.disposition is TaskDisposition.CALENDAR
+            and task.scheduled_for is not None
+            and _ensure_aware(task.scheduled_for).astimezone(timezone).date() == day
+        ]
+        blocked = [task for task in tasks if task.status is TaskStatus.BLOCKED]
+        as_of = datetime.combine(day, time.max, tzinfo=timezone)
+        current = self.current_task()
+        return DailyDashboard(
+            day=day,
+            current_task=self._entity_ref(current) if current else None,
+            inbox_count=len(self.list_inbox()),
+            overdue=refs(overdue),
+            due_today=refs(due_today),
+            follow_ups_due=refs(follow_ups),
+            escalations_due=refs(escalations),
+            scheduled_today=refs(scheduled),
+            blocked=refs(blocked),
+            available_actions=refs(self.focus(as_of=as_of)),
         )
 
     def start_task(self, task_id: str, *, switch: bool = False) -> Task:
@@ -1229,6 +1788,14 @@ class GtdService:
             )
         if task.status is TaskStatus.CANCELLED:
             raise InvalidTransitionError(f"Cancelled task {task.id} cannot be completed")
+        if task.waiting is not None:
+            raise InvalidTransitionError(
+                f"Task {task.id} is waiting; record or resolve the response before completion"
+            )
+        unresolved_blockers = [blocker for blocker in task.blockers if blocker.resolved_at is None]
+        if unresolved_blockers:
+            ids = ", ".join(blocker.id for blocker in unresolved_blockers)
+            raise InvalidTransitionError(f"Task {task.id} has unresolved blockers: {ids}")
         if waiver_reason is not None:
             waiver_reason = waiver_reason.strip()
             if not waiver_reason:
@@ -1267,7 +1834,7 @@ class GtdService:
             )
 
         now = utc_now()
-        actual_minutes = task.actual_minutes
+        actual_minutes = round(sum(self._effective_work_log_minutes(task).values()), 2)
         remaining_estimate = task.remaining_estimate_minutes
         work_logs = self._logs_with_legacy_actual(task)
         timer_log: WorkLog | None = None
@@ -1279,14 +1846,14 @@ class GtdService:
             )
             timer_minutes = max(round(duration_seconds / 60, 6), 0.000001)
             timer_log = WorkLog(
-                id=f"WL-{len(work_logs) + 1}",
+                id=_next_sequence_id("WL", (item.id for item in work_logs)),
                 minutes=timer_minutes,
                 source=WorkLogSource.TIMER,
                 started_at=task.started_at,
                 stopped_at=now,
             )
             work_logs.append(timer_log)
-            actual_minutes = round(sum(item.minutes for item in work_logs), 2)
+            actual_minutes = round(actual_minutes + timer_minutes, 2)
             if remaining_estimate is not None:
                 remaining_estimate = max(0, round(remaining_estimate - timer_minutes, 2))
         completion = task.completion.model_copy(
@@ -1381,14 +1948,17 @@ class GtdService:
                 "remaining_estimate_minutes": completed.original_estimate_minutes,
                 "actual_minutes": 0,
                 "work_logs": [],
+                "work_log_corrections": [],
                 "schedule": TaskSchedule().model_dump(mode="json"),
                 "waiting": None,
+                "waiting_history": [],
                 "blockers": [],
                 "completion": completion.model_dump(mode="json", exclude_none=True),
                 "resolution": None,
                 "result_summary": None,
                 "evidence_links": [],
                 "completed_at": None,
+                "completion_history": [],
                 "recurrence_series_id": series_id,
                 "occurrence_on": next_on,
             }
@@ -1442,6 +2012,66 @@ class GtdService:
         rendered = "\n".join(intent).strip()
         return rendered or fallback
 
+    def reopen_task(self, task_id: str, *, reason: str) -> Task:
+        clean_reason = reason.strip()
+        if not clean_reason:
+            raise InvalidTransitionError("Reopening a task requires a reason")
+        with self.workspace.lock():
+            record = self._task_record(task_id)
+            task = record.entity
+            if task.status is not TaskStatus.DONE or task.completed_at is None:
+                raise InvalidTransitionError(f"Task {task.id} is not completed")
+            if task.recurrence is not None:
+                raise InvalidTransitionError(
+                    "A recurring occurrence cannot be reopened after its successor is generated"
+                )
+            if task.resolution is None:
+                raise InvalidTransitionError(f"Task {task.id} has no completion resolution")
+            now = utc_now()
+            snapshot = CompletionSnapshot(
+                completed_at=task.completed_at,
+                resolution=task.resolution,
+                completion=task.completion,
+                result_summary=task.result_summary,
+                evidence_links=task.evidence_links,
+                actual_minutes=task.actual_minutes,
+                reopened_at=now,
+                reopen_reason=clean_reason,
+            )
+            completion = CompletionDefinition(
+                obvious=task.completion.obvious,
+                conditions=[
+                    CompletionCondition(id=condition.id, text=condition.text)
+                    for condition in task.completion.conditions
+                ],
+            )
+            updated = self._evolve_task(
+                task,
+                lifecycle=TaskLifecycle.OPEN,
+                disposition=TaskDisposition.NEXT,
+                execution=TaskExecution().model_dump(mode="json"),
+                completion=completion.model_dump(mode="json", exclude_none=True),
+                resolution=None,
+                completed_at=None,
+                result_summary=None,
+                evidence_links=[],
+                remaining_estimate_minutes=task.original_estimate_minutes,
+                completion_history=[
+                    *(
+                        item.model_dump(mode="json", exclude_none=True)
+                        for item in task.completion_history
+                    ),
+                    snapshot.model_dump(mode="json", exclude_none=True),
+                ],
+            )
+            self._write_task(record, updated)
+            self._event(
+                EventType.TASK_REOPENED,
+                entity_id=task.id,
+                payload={"reason": clean_reason},
+            )
+            return updated
+
     def block_task(self, task_id: str, reason: str) -> Task:
         with self.workspace.lock():
             return self._block_task_unlocked(task_id, reason)
@@ -1459,7 +2089,7 @@ class GtdService:
         blockers = [
             *task.blockers,
             TaskBlocker(
-                id=f"BLK-{len(task.blockers) + 1}",
+                id=_next_sequence_id("BLK", (item.id for item in task.blockers)),
                 description=reason.strip(),
             ),
         ]
@@ -1467,7 +2097,65 @@ class GtdService:
             task,
             blockers=[blocker.model_dump(mode="json") for blocker in blockers],
         )
-        return self._write_task(record, updated)
+        self._write_task(record, updated)
+        blocker = blockers[-1]
+        self._event(
+            EventType.TASK_BLOCKED,
+            entity_id=task.id,
+            payload={
+                "blocker_id": blocker.id,
+                "reason": blocker.description,
+                "created_at": blocker.created_at.isoformat(),
+                "blocking_task_id": blocker.task_id,
+            },
+        )
+        return updated
+
+    def resolve_blocker(
+        self,
+        task_id: str,
+        blocker_id: str,
+        *,
+        note: str,
+    ) -> Task:
+        if not note.strip():
+            raise InvalidTransitionError("Resolving a blocker requires a note")
+        with self.workspace.lock():
+            record = self._task_record(task_id)
+            task = record.entity
+            matches = [blocker for blocker in task.blockers if blocker.id == blocker_id]
+            if not matches:
+                raise EntityNotFoundError(f"No blocker {blocker_id!r} on {task.id}")
+            blocker = matches[0]
+            if blocker.resolved_at is not None:
+                return task
+            resolved_at = utc_now()
+            blockers = [
+                item.model_copy(
+                    update={
+                        "resolved_at": resolved_at,
+                        "resolution_note": note.strip(),
+                    }
+                )
+                if item.id == blocker.id
+                else item
+                for item in task.blockers
+            ]
+            updated = self._evolve_task(
+                task,
+                blockers=[item.model_dump(mode="json", exclude_none=True) for item in blockers],
+            )
+            self._write_task(record, updated)
+            self._event(
+                EventType.TASK_UNBLOCKED,
+                entity_id=task.id,
+                payload={
+                    "blocker_id": blocker.id,
+                    "note": note.strip(),
+                    "resolved_at": resolved_at.isoformat(),
+                },
+            )
+            return updated
 
     def ready_task(self, task_id: str) -> Task:
         """Return a waiting, blocked, or scheduled task to actionable state."""
@@ -1485,9 +2173,19 @@ class GtdService:
                 )
             previous_status = task.status
             resolved_at = utc_now()
+            resolved_blocker_ids: list[str] = []
+            resolved_waiting_id: str | None = None
             if previous_status is TaskStatus.BLOCKED:
+                resolved_blocker_ids = [
+                    blocker.id for blocker in task.blockers if blocker.resolved_at is None
+                ]
                 blockers = [
-                    blocker.model_copy(update={"resolved_at": blocker.resolved_at or resolved_at})
+                    blocker.model_copy(
+                        update={
+                            "resolved_at": blocker.resolved_at or resolved_at,
+                            "resolution_note": (blocker.resolution_note or "Made ready manually"),
+                        }
+                    )
                     for blocker in task.blockers
                 ]
                 updated = self._evolve_task(
@@ -1495,10 +2193,25 @@ class GtdService:
                     blockers=[blocker.model_dump(mode="json") for blocker in blockers],
                 )
             elif previous_status is TaskStatus.WAITING:
+                if task.waiting is None:
+                    raise InvalidTransitionError(f"Task {task.id} has no waiting detail")
+                resolved_waiting_id = task.waiting.id
+                resolved_waiting = self._evolve_waiting(
+                    task.waiting,
+                    resolved_at=resolved_at,
+                    resolution_note="Made ready manually",
+                )
                 updated = self._evolve_task(
                     task,
                     disposition=TaskDisposition.NEXT,
                     waiting=None,
+                    waiting_history=[
+                        *(
+                            item.model_dump(mode="json", exclude_none=True)
+                            for item in task.waiting_history
+                        ),
+                        resolved_waiting.model_dump(mode="json", exclude_none=True),
+                    ],
                 )
             else:
                 schedule = task.schedule.model_copy(update={"scheduled_for": None})
@@ -1508,6 +2221,25 @@ class GtdService:
                     schedule=schedule.model_dump(mode="json", exclude_none=True),
                 )
             self._write_task(record, updated)
+            for resolved_blocker_id in resolved_blocker_ids:
+                self._event(
+                    EventType.TASK_UNBLOCKED,
+                    entity_id=task.id,
+                    payload={
+                        "blocker_id": resolved_blocker_id,
+                        "note": "Made ready manually",
+                    },
+                )
+            if resolved_waiting_id is not None:
+                self._event(
+                    EventType.TASK_WAITING_RESOLVED,
+                    entity_id=task.id,
+                    payload={
+                        "waiting_id": resolved_waiting_id,
+                        "manual_ready": True,
+                        "outcome": "Made ready manually",
+                    },
+                )
             self._event(
                 EventType.TASK_READY,
                 entity_id=updated.id,
@@ -1551,10 +2283,138 @@ class GtdService:
             for task in self.list_tasks()
         )
 
-    def weekly_review(self) -> ReviewReport:
+    def _weekly_review_record(
+        self,
+        review_id: str,
+    ) -> EntityRecord[WeeklyReviewSession]:
+        return cast(
+            EntityRecord[WeeklyReviewSession],
+            self.workspace.find_record(review_id, kinds={"weekly_review"}),
+        )
+
+    def _active_weekly_review(self) -> WeeklyReviewSession | None:
+        active = [
+            cast(WeeklyReviewSession, record.entity)
+            for record in self.workspace.list_records("weekly_review")
+            if cast(WeeklyReviewSession, record.entity).completed_at is None
+        ]
+        if len(active) > 1:
+            raise InvalidDocumentError("Multiple unfinished weekly reviews exist; run `ws doctor`")
+        return active[0] if active else None
+
+    @staticmethod
+    def _weekly_review_body() -> str:
+        return (
+            "# Weekly review\n\n"
+            "Check each step only after consciously reviewing its queue. "
+            "Attention items do not need to be empty before the review can finish.\n"
+        )
+
+    def start_weekly_review(self) -> WeeklyReviewSession:
+        """Start or resume the single durable weekly-review session."""
+
+        with self.workspace.lock():
+            active = self._active_weekly_review()
+            if active is not None:
+                return active
+            session = WeeklyReviewSession(id=_new_id("REVIEW"))
+            self.workspace.write(session, self._weekly_review_body())
+            self._event(
+                EventType.REVIEW_STARTED,
+                entity_id=session.id,
+                payload={"kind": "weekly"},
+            )
+            return session
+
+    def check_weekly_review_step(
+        self,
+        review_id: str,
+        step: WeeklyReviewStep | str,
+        *,
+        checked: bool = True,
+    ) -> WeeklyReviewSession:
+        """Mark one review queue checked, preserving the resumable session."""
+
+        try:
+            requested = WeeklyReviewStep(step)
+        except ValueError as exc:
+            raise InvalidTransitionError(f"Unknown weekly review step: {step}") from exc
+        with self.workspace.lock():
+            record = self._weekly_review_record(review_id)
+            session = record.entity
+            if session.completed_at is not None:
+                raise InvalidTransitionError(f"Weekly review {session.id} is already complete")
+            current = next(state for state in session.steps if state.step is requested)
+            target_checked_at = utc_now() if checked else None
+            if (current.checked_at is not None) is checked:
+                return session
+            steps = [
+                ReviewStepState(
+                    step=state.step,
+                    checked_at=target_checked_at if state.step is requested else state.checked_at,
+                )
+                for state in session.steps
+            ]
+            updated = WeeklyReviewSession.model_validate(
+                {
+                    **session.model_dump(mode="json", exclude_none=True),
+                    "revision": session.revision + 1,
+                    "steps": [state.model_dump(mode="json", exclude_none=True) for state in steps],
+                }
+            )
+            self.workspace.write(updated, record.body)
+            self._event(
+                EventType.REVIEW_STEP_CHECKED,
+                entity_id=session.id,
+                payload={"step": requested.value, "checked": checked},
+            )
+            return updated
+
+    def complete_weekly_review(self, review_id: str) -> WeeklyReviewSession:
+        """Complete a review only after every queue was consciously checked."""
+
+        with self.workspace.lock():
+            record = self._weekly_review_record(review_id)
+            session = record.entity
+            if session.completed_at is not None:
+                return session
+            unchecked = [state.step.value for state in session.steps if state.checked_at is None]
+            if unchecked:
+                raise InvalidTransitionError(
+                    "Weekly review has unchecked steps: " + ", ".join(unchecked)
+                )
+            now = utc_now()
+            updated = WeeklyReviewSession.model_validate(
+                {
+                    **session.model_dump(mode="json", exclude_none=True),
+                    "revision": session.revision + 1,
+                    "completed_at": now,
+                }
+            )
+            self.workspace.write(updated, record.body)
+            for project_record in self.workspace.list_records("gtd_project"):
+                project = cast(GtdProject, project_record.entity)
+                if project.status is ProjectStatus.ACTIVE:
+                    project.last_reviewed_at = now
+                    project.updated_at = now
+                    self.workspace.write(project, project_record.body)
+            report = self.weekly_review(review_id=session.id)
+            self._event(
+                EventType.REVIEW_COMPLETED,
+                entity_id=session.id,
+                payload={"kind": "weekly", "attention_count": report.attention_count},
+            )
+            return updated
+
+    def weekly_review(self, review_id: str | None = None) -> ReviewReport:
         now = utc_now()
-        today = now.date()
         settings = self.workspace.settings()
+        today = now.astimezone(ZoneInfo(settings.timezone)).date()
+        session = (
+            self._weekly_review_record(review_id).entity
+            if review_id is not None
+            else self._active_weekly_review()
+        )
         inbox = [
             ReviewItem(
                 id=item.id,
@@ -1625,6 +2485,28 @@ class GtdService:
         if current is not None:
             current_ref = self._entity_ref(current)
         someday_count = len(self.workspace.list_records("someday"))
+        checklist_counts = {
+            WeeklyReviewStep.INBOX_ZERO: len(inbox),
+            WeeklyReviewStep.CALENDAR_REVIEWED: len(scheduled),
+            WeeklyReviewStep.WAITING_REVIEWED: len(waiting),
+            WeeklyReviewStep.PROJECTS_REVIEWED: len(projects_without_action),
+            WeeklyReviewStep.SOMEDAY_REVIEWED: someday_count,
+        }
+        checked_at_by_step = (
+            {state.step: state.checked_at for state in session.steps} if session else {}
+        )
+        checklist = [
+            ReviewChecklistItem(
+                key=step.value,
+                label=WEEKLY_REVIEW_LABELS[step],
+                complete=(
+                    checked_at_by_step.get(step) is not None if session is not None else count == 0
+                ),
+                count=count,
+                checked_at=checked_at_by_step.get(step),
+            )
+            for step, count in checklist_counts.items()
+        ]
         return ReviewReport(
             current_task=current_ref,
             inbox=inbox,
@@ -1634,23 +2516,20 @@ class GtdService:
             projects_without_next_action=projects_without_action,
             scheduled=scheduled,
             someday_count=someday_count,
+            checklist=checklist,
+            session_id=session.id if session else None,
+            session_started_at=session.started_at if session else None,
         )
 
     def record_review(self, kind: str = "weekly") -> ReviewReport:
-        report = self.weekly_review()
-        now = utc_now()
-        if kind == "weekly":
-            for project_record in self.workspace.list_records("gtd_project"):
-                project = cast(GtdProject, project_record.entity)
-                if project.status is ProjectStatus.ACTIVE:
-                    project.last_reviewed_at = now
-                    project.updated_at = now
-                    self.workspace.write(project, project_record.body)
-        self._event(
-            EventType.REVIEW_COMPLETED,
-            payload={"kind": kind, "attention_count": report.attention_count},
-        )
-        return report
+        if kind != "weekly":
+            raise InvalidTransitionError(f"Unsupported review kind: {kind}")
+        session = self.start_weekly_review()
+        for state in session.steps:
+            if state.checked_at is None:
+                session = self.check_weekly_review_step(session.id, state.step)
+        self.complete_weekly_review(session.id)
+        return self.weekly_review(review_id=session.id)
 
     def validate(self) -> ValidationReport:
         issues: list[ValidationIssue] = []
@@ -1871,55 +2750,9 @@ class GtdService:
             )
         return ValidationReport(issues=issues, counts=counts)
 
-    def metrics(self) -> MetricsReport:
-        tasks = self.list_tasks()
-        completed = [task for task in tasks if task.status is TaskStatus.DONE and task.completed_at]
-        logged_seconds_by_task: dict[str, float] = {}
-        legacy_stopped_seconds_by_task: dict[str, float] = {}
-        for event in self.events.read_all():
-            if event.entity_id is None:
-                continue
-            if event.type == EventType.TASK_WORK_LOGGED:
-                logged_seconds_by_task[event.entity_id] = (
-                    logged_seconds_by_task.get(event.entity_id, 0.0)
-                    + float(event.payload.get("minutes", 0.0)) * 60
-                )
-            elif event.type == EventType.TASK_STOPPED and not event.payload.get("work_log_id"):
-                legacy_stopped_seconds_by_task[event.entity_id] = (
-                    legacy_stopped_seconds_by_task.get(event.entity_id, 0.0)
-                    + float(event.payload.get("duration_seconds", 0.0))
-                )
-        focus_seconds_by_task = {
-            task.id: logged_seconds_by_task.get(task.id, 0.0)
-            + legacy_stopped_seconds_by_task.get(task.id, 0.0)
-            for task in tasks
-        }
-        now = utc_now()
-        recent = [
-            task
-            for task in completed
-            if now - _ensure_aware(cast(datetime, task.completed_at)) <= timedelta(days=7)
-        ]
-        lead_hours = [
-            (
-                _ensure_aware(cast(datetime, task.completed_at)) - _ensure_aware(task.created_at)
-            ).total_seconds()
-            / 3600
-            for task in completed
-        ]
-        estimate_ratios = [
-            (focus_seconds_by_task.get(task.id, 0.0) / 60) / task.estimate_minutes
-            for task in completed
-            if task.estimate_minutes and focus_seconds_by_task.get(task.id, 0.0) > 0
-        ]
-        return MetricsReport(
-            completed_total=len(completed),
-            completed_last_7_days=len(recent),
-            focus_minutes_total=round(sum(focus_seconds_by_task.values()) / 60, 2),
-            average_lead_time_hours=(
-                round(sum(lead_hours) / len(lead_hours), 2) if lead_hours else None
-            ),
-            average_estimate_ratio=(
-                round(sum(estimate_ratios) / len(estimate_ratios), 2) if estimate_ratios else None
-            ),
+    def metrics(self, *, as_of: datetime | None = None) -> MetricsReport:
+        return project_metrics(
+            self.list_tasks(),
+            self.events.read_all(),
+            as_of=as_of,
         )

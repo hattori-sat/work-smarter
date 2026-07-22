@@ -117,6 +117,13 @@ class WorkLogSource(StrEnum):
     MIGRATED = "migrated"
 
 
+class WaitingInteractionKind(StrEnum):
+    DELEGATED = "delegated"
+    FOLLOW_UP = "follow_up"
+    RESPONSE = "response"
+    ESCALATED = "escalated"
+
+
 class RecurrenceFrequency(StrEnum):
     DAILY = "daily"
     WEEKLY = "weekly"
@@ -148,6 +155,15 @@ class EntityKind(StrEnum):
     REFERENCE = "reference"
     SOMEDAY = "someday"
     INBOX_ARCHIVE = "inbox_archive"
+    WEEKLY_REVIEW = "weekly_review"
+
+
+class WeeklyReviewStep(StrEnum):
+    INBOX_ZERO = "inbox_zero"
+    CALENDAR_REVIEWED = "calendar_reviewed"
+    WAITING_REVIEWED = "waiting_reviewed"
+    PROJECTS_REVIEWED = "projects_reviewed"
+    SOMEDAY_REVIEWED = "someday_reviewed"
 
 
 class InboxItem(StrictModel):
@@ -197,7 +213,35 @@ class TaskSchedule(StrictModel):
     due_on: date | None = None
 
 
+class WaitingInteraction(StrictModel):
+    id: str
+    kind: WaitingInteractionKind
+    occurred_at: datetime = Field(default_factory=utc_now)
+    note: str | None = None
+    party: str | None = None
+    next_follow_up_on: date | None = None
+
+    @field_validator("id")
+    @classmethod
+    def validate_id(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("waiting interaction ID cannot be blank")
+        return cleaned
+
+    @field_validator("note", "party")
+    @classmethod
+    def validate_optional_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("waiting interaction text cannot be blank")
+        return cleaned
+
+
 class WaitingDetail(StrictModel):
+    id: str = "WAIT-1"
     target_kind: Literal["person", "external"] = "person"
     target: str = Field(min_length=1)
     request: str | None = None
@@ -207,6 +251,41 @@ class WaitingDetail(StrictModel):
     escalation_on: date | None = None
     escalation_to: str | None = None
     last_followed_up_at: datetime | None = None
+    last_escalated_at: datetime | None = None
+    interactions: list[WaitingInteraction] = Field(default_factory=list)
+    resolved_at: datetime | None = None
+    resolution_note: str | None = None
+
+    @field_validator("id", "target")
+    @classmethod
+    def validate_required_text(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("waiting ID and target cannot be blank")
+        return cleaned
+
+    @field_validator("request", "escalation_to", "resolution_note")
+    @classmethod
+    def validate_optional_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("waiting text fields cannot be blank")
+        return cleaned
+
+    @model_validator(mode="after")
+    def validate_waiting_detail(self) -> WaitingDetail:
+        if self.escalation_on is not None and self.escalation_to is None:
+            raise ValueError("waiting escalation_on requires escalation_to")
+        interaction_ids = [interaction.id for interaction in self.interactions]
+        if len(interaction_ids) != len(set(interaction_ids)):
+            raise ValueError("waiting interaction IDs must be unique within a cycle")
+        if self.resolved_at is None and self.resolution_note is not None:
+            raise ValueError("active waiting cannot have a resolution note")
+        if self.resolved_at is not None and self.resolution_note is None:
+            raise ValueError("resolved waiting requires a resolution note")
+        return self
 
 
 class TaskBlocker(StrictModel):
@@ -215,6 +294,7 @@ class TaskBlocker(StrictModel):
     task_id: str | None = None
     created_at: datetime = Field(default_factory=utc_now)
     resolved_at: datetime | None = None
+    resolution_note: str | None = None
 
 
 class TaskRelation(StrictModel):
@@ -279,6 +359,17 @@ class CompletionDefinition(StrictModel):
         return self
 
 
+class CompletionSnapshot(StrictModel):
+    completed_at: datetime
+    resolution: TaskResolution
+    completion: CompletionDefinition
+    result_summary: str | None = None
+    evidence_links: list[str] = Field(default_factory=list)
+    actual_minutes: float = Field(default=0, ge=0)
+    reopened_at: datetime = Field(default_factory=utc_now)
+    reopen_reason: str
+
+
 class WorkLog(StrictModel):
     id: str
     minutes: float = Field(gt=0)
@@ -299,6 +390,23 @@ class WorkLog(StrictModel):
         if started is not None and stopped is not None and stopped < started:
             raise ValueError("work log stopped_at cannot precede started_at")
         return self
+
+
+class WorkLogCorrection(StrictModel):
+    id: str
+    work_log_id: str
+    previous_minutes: float = Field(ge=0)
+    corrected_minutes: float = Field(ge=0)
+    reason: str
+    recorded_at: datetime = Field(default_factory=utc_now)
+
+    @field_validator("id", "work_log_id", "reason")
+    @classmethod
+    def validate_required_text(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("work-log correction ID, target, and reason cannot be blank")
+        return cleaned
 
 
 class RecurrenceRule(StrictModel):
@@ -352,8 +460,10 @@ class Task(StrictModel):
     remaining_estimate_minutes: float | None = Field(default=None, ge=0)
     actual_minutes: float = Field(default=0, ge=0)
     work_logs: list[WorkLog] = Field(default_factory=list)
+    work_log_corrections: list[WorkLogCorrection] = Field(default_factory=list)
     schedule: TaskSchedule = Field(default_factory=TaskSchedule)
     waiting: WaitingDetail | None = None
+    waiting_history: list[WaitingDetail] = Field(default_factory=list)
     blockers: list[TaskBlocker] = Field(default_factory=list)
     constraints: list[str] = Field(default_factory=list)
     assumptions: list[Assumption] = Field(default_factory=list)
@@ -366,6 +476,7 @@ class Task(StrictModel):
     recurrence_series_id: str | None = None
     occurrence_on: date | None = None
     completed_at: datetime | None = None
+    completion_history: list[CompletionSnapshot] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
 
     @field_validator("goal", "why", "desired_outcome")
@@ -486,10 +597,45 @@ class Task(StrictModel):
 
     @model_validator(mode="after")
     def validate_state_fields(self) -> Task:
-        if self.disposition is TaskDisposition.WAITING and self.waiting is None:
-            raise ValueError("waiting tasks require waiting detail")
+        has_active_waiting = self.waiting is not None
+        if (self.disposition is TaskDisposition.WAITING) != has_active_waiting:
+            raise ValueError("waiting disposition and active waiting detail must agree")
+        if self.waiting is not None and self.waiting.resolved_at is not None:
+            raise ValueError("active waiting detail cannot already be resolved")
+        if any(item.resolved_at is None for item in self.waiting_history):
+            raise ValueError("waiting history can contain only resolved cycles")
+        waiting_ids = [item.id for item in self.waiting_history]
+        if self.waiting is not None:
+            waiting_ids.append(self.waiting.id)
+        if len(waiting_ids) != len(set(waiting_ids)):
+            raise ValueError("waiting cycle IDs must be unique")
+        work_log_ids = [item.id for item in self.work_logs]
+        if len(work_log_ids) != len(set(work_log_ids)):
+            raise ValueError("work log IDs must be unique")
+        correction_ids = [item.id for item in self.work_log_corrections]
+        if len(correction_ids) != len(set(correction_ids)):
+            raise ValueError("work log correction IDs must be unique")
+        effective_minutes = {item.id: item.minutes for item in self.work_logs}
+        for correction in self.work_log_corrections:
+            previous = effective_minutes.get(correction.work_log_id)
+            if previous is None:
+                raise ValueError(
+                    f"work log correction targets missing log {correction.work_log_id}"
+                )
+            if abs(previous - correction.previous_minutes) > 0.000001:
+                raise ValueError(
+                    f"work log correction chain for {correction.work_log_id} is inconsistent"
+                )
+            effective_minutes[correction.work_log_id] = correction.corrected_minutes
         if self.disposition is TaskDisposition.CALENDAR and self.schedule.scheduled_for is None:
             raise ValueError("calendar tasks require scheduled_for")
+        if self.lifecycle is not TaskLifecycle.OPEN:
+            if self.execution.state is not ExecutionState.IDLE:
+                raise ValueError("closed tasks cannot be doing")
+            if self.waiting is not None:
+                raise ValueError("closed tasks cannot retain active waiting")
+            if any(blocker.resolved_at is None for blocker in self.blockers):
+                raise ValueError("closed tasks cannot retain unresolved blockers")
         if self.lifecycle is TaskLifecycle.COMPLETED:
             if self.completed_at is None:
                 raise ValueError("completed tasks require completed_at")
@@ -672,7 +818,43 @@ class SomedayItem(StrictModel):
     tags: list[str] = Field(default_factory=list)
 
 
-DurableEntity = InboxItem | Task | GtdProject | Reference | SomedayItem | ArchivedInboxItem
+class ReviewStepState(StrictModel):
+    step: WeeklyReviewStep
+    checked_at: datetime | None = None
+
+
+class WeeklyReviewSession(StrictModel):
+    schema_version: Literal[1] = 1
+    id: str
+    kind: Literal["weekly_review"] = "weekly_review"
+    revision: int = Field(default=1, ge=1)
+    started_at: datetime = Field(default_factory=utc_now)
+    completed_at: datetime | None = None
+    steps: list[ReviewStepState] = Field(
+        default_factory=lambda: [ReviewStepState(step=step) for step in WeeklyReviewStep]
+    )
+
+    @model_validator(mode="after")
+    def validate_steps(self) -> WeeklyReviewSession:
+        step_values = [state.step for state in self.steps]
+        if len(step_values) != len(set(step_values)):
+            raise ValueError("weekly review steps must be unique")
+        if set(step_values) != set(WeeklyReviewStep):
+            raise ValueError("weekly review must contain every required step")
+        if self.completed_at is not None and any(state.checked_at is None for state in self.steps):
+            raise ValueError("completed weekly review requires every step to be checked")
+        return self
+
+
+DurableEntity = (
+    InboxItem
+    | Task
+    | GtdProject
+    | Reference
+    | SomedayItem
+    | ArchivedInboxItem
+    | WeeklyReviewSession
+)
 
 
 class EntityRef(StrictModel):
@@ -680,6 +862,20 @@ class EntityRef(StrictModel):
     kind: str
     title: str
     path: str
+
+
+class DailyDashboard(StrictModel):
+    generated_at: datetime = Field(default_factory=utc_now)
+    day: date
+    current_task: EntityRef | None = None
+    inbox_count: int = 0
+    overdue: list[EntityRef] = Field(default_factory=list)
+    due_today: list[EntityRef] = Field(default_factory=list)
+    follow_ups_due: list[EntityRef] = Field(default_factory=list)
+    escalations_due: list[EntityRef] = Field(default_factory=list)
+    scheduled_today: list[EntityRef] = Field(default_factory=list)
+    blocked: list[EntityRef] = Field(default_factory=list)
+    available_actions: list[EntityRef] = Field(default_factory=list)
 
 
 class ClarifyResult(StrictModel):
@@ -713,6 +909,14 @@ class ReviewItem(StrictModel):
     age_days: int | None = None
 
 
+class ReviewChecklistItem(StrictModel):
+    key: str
+    label: str
+    complete: bool
+    count: int = 0
+    checked_at: datetime | None = None
+
+
 class ReviewReport(StrictModel):
     generated_at: datetime = Field(default_factory=utc_now)
     current_task: EntityRef | None = None
@@ -723,6 +927,9 @@ class ReviewReport(StrictModel):
     projects_without_next_action: list[ReviewItem] = Field(default_factory=list)
     scheduled: list[ReviewItem] = Field(default_factory=list)
     someday_count: int = 0
+    checklist: list[ReviewChecklistItem] = Field(default_factory=list)
+    session_id: str | None = None
+    session_started_at: datetime | None = None
 
     @computed_field
     @property
@@ -765,6 +972,17 @@ class MetricsReport(StrictModel):
     focus_minutes_total: float = 0
     average_lead_time_hours: float | None = None
     average_estimate_ratio: float | None = None
+    average_cycle_time_hours: float | None = None
+    waiting_minutes_total: float = 0
+    blocked_minutes_total: float = 0
+    wip_current: int = 0
+    waiting_current: int = 0
+    blocked_current: int = 0
+    average_current_waiting_age_hours: float | None = None
+    oldest_waiting_age_hours: float | None = None
+    average_current_blocked_age_hours: float | None = None
+    oldest_blocked_age_hours: float | None = None
+    cycle_time_sample_count: int = 0
 
 
 class EventPayload(StrictModel):

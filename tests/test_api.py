@@ -223,3 +223,230 @@ def test_api_manages_parent_effort_priority_and_recurrence(tmp_path: Path) -> No
             },
         )
         assert recurring.json()["next_occurrence_on"] == "2026-07-30"
+
+
+def test_api_corrects_work_without_rewriting_the_original_log(tmp_path: Path) -> None:
+    with TestClient(create_app(tmp_path)) as client:
+        client.post("/api/workspace/init")
+        task_id = client.post(
+            "/api/gtd/tasks",
+            json={"text": "Inspect the execution trace"},
+        ).json()["created"][0]["id"]
+        logged = client.post(
+            f"/api/gtd/tasks/{task_id}/work-logs",
+            json={"minutes": 15, "note": "Mistyped duration"},
+        ).json()
+        work_log_id = logged["work_logs"][0]["id"]
+
+        corrected = client.post(
+            f"/api/gtd/tasks/{task_id}/work-logs/{work_log_id}/correct",
+            json={"corrected_minutes": 5, "reason": "Timer included an interruption"},
+        )
+
+        assert corrected.status_code == 200
+        assert corrected.json()["work_logs"][0]["minutes"] == 15
+        assert corrected.json()["actual_minutes"] == 5
+        correction = corrected.json()["work_log_corrections"][0]
+        assert correction["work_log_id"] == work_log_id
+        assert correction["previous_minutes"] == 15
+        assert correction["corrected_minutes"] == 5
+        assert correction["reason"] == "Timer included an interruption"
+
+
+def test_api_manages_delegation_follow_up_escalation_and_blockers(
+    tmp_path: Path,
+) -> None:
+    with TestClient(create_app(tmp_path)) as client:
+        client.post("/api/workspace/init")
+        task_id = client.post(
+            "/api/gtd/tasks",
+            json={"text": "Obtain the security decision"},
+        ).json()["created"][0]["id"]
+
+        delegated = client.post(
+            f"/api/gtd/tasks/{task_id}/delegate",
+            json={
+                "target": "Security team",
+                "target_kind": "external",
+                "request": "Approve the release",
+                "expected_on": "2026-07-23",
+                "follow_up_on": "2026-07-24",
+                "escalation_on": "2026-07-25",
+                "escalation_to": "CTO",
+            },
+        )
+        assert delegated.status_code == 200
+        assert delegated.json()["disposition"] == "waiting"
+        assert delegated.json()["waiting"]["target"] == "Security team"
+
+        followed_up = client.post(
+            f"/api/gtd/tasks/{task_id}/follow-up",
+            json={"note": "Asked in the review channel", "next_follow_up_on": "2026-07-25"},
+        )
+        assert followed_up.status_code == 200
+        assert followed_up.json()["waiting"]["follow_up_on"] == "2026-07-25"
+
+        pending = client.post(
+            f"/api/gtd/tasks/{task_id}/response",
+            json={
+                "note": "Needs one more trace",
+                "resolved": False,
+                "next_follow_up_on": "2026-07-26",
+            },
+        )
+        assert pending.status_code == 200
+        assert pending.json()["disposition"] == "waiting"
+
+        escalated = client.post(
+            f"/api/gtd/tasks/{task_id}/escalate",
+            json={"note": "Decision is now release-critical", "escalation_to": "CTO"},
+        )
+        assert escalated.status_code == 200
+        assert escalated.json()["waiting"]["last_escalated_at"] is not None
+
+        resolved = client.post(
+            f"/api/gtd/tasks/{task_id}/response",
+            json={"note": "Approved with recorded evidence", "resolved": True},
+        )
+        assert resolved.status_code == 200
+        assert resolved.json()["disposition"] == "next"
+        assert resolved.json()["waiting"] is None
+        assert resolved.json()["waiting_history"][0]["resolution_note"] == (
+            "Approved with recorded evidence"
+        )
+
+        blocked = client.post(
+            f"/api/gtd/tasks/{task_id}/block",
+            json={"reason": "Release branch is locked"},
+        ).json()
+        blocker_id = blocked["blockers"][0]["id"]
+        unblocked = client.post(
+            f"/api/gtd/tasks/{task_id}/blockers/{blocker_id}/resolve",
+            json={"note": "Branch unlocked by release manager"},
+        )
+        assert unblocked.status_code == 200
+        assert unblocked.json()["blockers"][0]["resolved_at"] is not None
+
+
+def test_api_manages_schedule_due_defer_dashboard_and_reopen(tmp_path: Path) -> None:
+    with TestClient(create_app(tmp_path)) as client:
+        client.post("/api/workspace/init")
+        task_id = client.post(
+            "/api/gtd/tasks",
+            json={"text": "Run the release window"},
+        ).json()["created"][0]["id"]
+
+        scheduled = client.put(
+            f"/api/gtd/tasks/{task_id}/schedule",
+            json={"scheduled_for": "2026-07-23T09:00:00+09:00"},
+        )
+        assert scheduled.status_code == 200
+        assert scheduled.json()["disposition"] == "calendar"
+
+        deferred = client.put(
+            f"/api/gtd/tasks/{task_id}/defer",
+            json={"not_before": "2026-07-23T08:00:00+09:00"},
+        )
+        assert deferred.status_code == 200
+        assert deferred.json()["schedule"]["not_before"] == "2026-07-23T08:00:00+09:00"
+
+        due = client.put(
+            f"/api/gtd/tasks/{task_id}/due",
+            json={"due_on": "2026-07-23"},
+        )
+        assert due.status_code == 200
+        assert due.json()["schedule"]["due_on"] == "2026-07-23"
+
+        dashboard = client.get(
+            "/api/gtd/dashboard/today",
+            params={"day": "2026-07-23"},
+        )
+        assert dashboard.status_code == 200
+        assert dashboard.json()["day"] == "2026-07-23"
+        assert [item["id"] for item in dashboard.json()["due_today"]] == [task_id]
+        assert [item["id"] for item in dashboard.json()["scheduled_today"]] == [task_id]
+
+        completed_task_id = client.post(
+            "/api/gtd/tasks",
+            json={"text": "Record the decision"},
+        ).json()["created"][0]["id"]
+        client.post(f"/api/gtd/tasks/{completed_task_id}/start")
+        client.post(f"/api/gtd/tasks/{completed_task_id}/complete")
+        reopened = client.post(
+            f"/api/gtd/tasks/{completed_task_id}/reopen",
+            json={"reason": "The evidence link was incorrect"},
+        )
+        assert reopened.status_code == 200
+        assert reopened.json()["status"] == "next"
+        assert reopened.json()["completion_history"][0]["reopen_reason"] == (
+            "The evidence link was incorrect"
+        )
+
+
+def test_api_runs_a_durable_weekly_review_and_exposes_typed_workflow_contracts(
+    tmp_path: Path,
+) -> None:
+    with TestClient(create_app(tmp_path)) as client:
+        client.post("/api/workspace/init")
+
+        started = client.post("/api/gtd/review/weekly/start")
+        assert started.status_code == 201
+        review_id = started.json()["id"]
+
+        for step in (
+            "inbox_zero",
+            "calendar_reviewed",
+            "waiting_reviewed",
+            "projects_reviewed",
+            "someday_reviewed",
+        ):
+            checked = client.put(
+                f"/api/gtd/review/weekly/{review_id}/steps/{step}",
+                json={"checked": True},
+            )
+            assert checked.status_code == 200
+
+        completed = client.post(f"/api/gtd/review/weekly/{review_id}/complete")
+        assert completed.status_code == 200
+        assert completed.json()["completed_at"] is not None
+
+        schema = client.get("/openapi.json").json()
+        assert (
+            schema["paths"]["/api/gtd/dashboard/today"]["get"]["responses"]["200"]["content"][
+                "application/json"
+            ]["schema"]["$ref"]
+            == "#/components/schemas/DailyDashboard"
+        )
+        assert (
+            schema["paths"]["/api/gtd/review/weekly/start"]["post"]["responses"]["201"]["content"][
+                "application/json"
+            ]["schema"]["$ref"]
+            == "#/components/schemas/WeeklyReviewSession"
+        )
+
+
+def test_api_maps_workflow_refusals_and_rejects_malformed_requests(tmp_path: Path) -> None:
+    with TestClient(create_app(tmp_path)) as client:
+        client.post("/api/workspace/init")
+        task_id = client.post(
+            "/api/gtd/tasks",
+            json={"text": "Review the dependency"},
+        ).json()["created"][0]["id"]
+
+        not_waiting = client.post(
+            f"/api/gtd/tasks/{task_id}/follow-up",
+            json={"note": "This task was never delegated"},
+        )
+        assert not_waiting.status_code == 409
+        assert not_waiting.json()["error"] == "InvalidTransitionError"
+
+        malformed = client.put(
+            f"/api/gtd/tasks/{task_id}/schedule",
+            json={"scheduled_for": "tomorrow morning"},
+        )
+        assert malformed.status_code == 422
+
+        review_id = client.post("/api/gtd/review/weekly/start").json()["id"]
+        unchecked = client.post(f"/api/gtd/review/weekly/{review_id}/complete")
+        assert unchecked.status_code == 409
+        assert unchecked.json()["error"] == "InvalidTransitionError"

@@ -11,6 +11,8 @@
 - [Developer guide](development/README.md)
 - [Branching and delivery](development/branching.md)
 - [Testing strategy](development/testing.md)
+- [Developing the GTD workflow](development/gtd-workflow.md)
+- [GTD workflow specification](specs/gtd-workflow.md)
 - [Architecture decisions](architecture/0001-text-first-modular-monolith.md)
 - [Feature contract](architecture/0002-feature-contract.md)
 - [Product specifications](product/)

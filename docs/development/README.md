@@ -25,6 +25,8 @@ python3.12 -m venv .venv
 
 - [Branching](branching.md)
 - [Testing](testing.md)
+- [Developing the GTD workflow](gtd-workflow.md)
+- [GTD workflow specification](../specs/gtd-workflow.md)
 - [TASK.md](../../TASK.md)
 - [Feature contract ADR](../architecture/0002-feature-contract.md)
 
