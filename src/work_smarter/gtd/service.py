@@ -7,6 +7,7 @@ from datetime import UTC, date, datetime, time
 from pathlib import Path
 from typing import Any, cast
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from pydantic import ValidationError
 
@@ -105,6 +106,14 @@ WEEKLY_REVIEW_LABELS = {
 def _new_id(prefix: str) -> str:
     timestamp = utc_now().strftime("%Y%m%d-%H%M%S")
     return f"{prefix}-{timestamp}-{uuid4().hex[:6].upper()}"
+
+
+def _next_sequence_id(prefix: str, existing_ids: Iterable[str]) -> str:
+    existing = set(existing_ids)
+    sequence = 1
+    while f"{prefix}-{sequence}" in existing:
+        sequence += 1
+    return f"{prefix}-{sequence}"
 
 
 def _title_from_text(text: str) -> str:
@@ -585,6 +594,40 @@ class GtdService:
         except ValidationError as exc:
             raise InvalidTransitionError(str(exc)) from exc
 
+    @staticmethod
+    def _waiting_interaction(
+        waiting: WaitingDetail,
+        *,
+        kind: WaitingInteractionKind,
+        note: str | None,
+        occurred_at: datetime,
+        party: str | None = None,
+        next_follow_up_on: date | str | None = None,
+    ) -> WaitingInteraction:
+        try:
+            return WaitingInteraction(
+                id=_next_sequence_id(
+                    "INT",
+                    (interaction.id for interaction in waiting.interactions),
+                ),
+                kind=kind,
+                occurred_at=occurred_at,
+                note=note,
+                party=party,
+                next_follow_up_on=next_follow_up_on,
+            )
+        except ValidationError as exc:
+            raise InvalidTransitionError(str(exc)) from exc
+
+    @staticmethod
+    def _evolve_schedule(schedule: TaskSchedule, **updates: Any) -> TaskSchedule:
+        data = schedule.model_dump(mode="json", exclude_none=True)
+        data.update(updates)
+        try:
+            return TaskSchedule.model_validate(data)
+        except ValidationError as exc:
+            raise InvalidTransitionError(str(exc)) from exc
+
     def get_task(self, task_id: str) -> Task:
         return self._task_record(task_id).entity
 
@@ -823,7 +866,7 @@ class GtdService:
         existing_logs = self._logs_with_legacy_actual(task)
         effective_existing = self._effective_work_log_minutes(task)
         log = WorkLog(
-            id=f"WL-{len(existing_logs) + 1}",
+            id=_next_sequence_id("WL", (item.id for item in existing_logs)),
             minutes=max(round(minutes, 6), 0.000001),
             source=source,
             note=note.strip() if note else None,
@@ -975,25 +1018,27 @@ class GtdService:
             now = utc_now()
             clean_request = request.strip() if request and request.strip() else None
             waiting_id = _new_id("WAIT")
-            waiting = WaitingDetail(
-                id=waiting_id,
-                target_kind=target_kind,
-                target=target,
-                request=clean_request,
-                delegated_at=now,
-                expected_on=expected_on,
-                follow_up_on=follow_up_on,
-                escalation_on=escalation_on,
-                escalation_to=escalation_to,
-                interactions=[
-                    WaitingInteraction(
-                        id="INT-1",
-                        kind=WaitingInteractionKind.DELEGATED,
-                        occurred_at=now,
-                        note=clean_request,
-                    )
-                ],
-            )
+            try:
+                delegated_interaction = WaitingInteraction(
+                    id="INT-1",
+                    kind=WaitingInteractionKind.DELEGATED,
+                    occurred_at=now,
+                    note=clean_request,
+                )
+                waiting = WaitingDetail(
+                    id=waiting_id,
+                    target_kind=target_kind,
+                    target=target,
+                    request=clean_request,
+                    delegated_at=now,
+                    expected_on=expected_on,
+                    follow_up_on=follow_up_on,
+                    escalation_on=escalation_on,
+                    escalation_to=escalation_to,
+                    interactions=[delegated_interaction],
+                )
+            except ValidationError as exc:
+                raise InvalidTransitionError(str(exc)) from exc
             schedule = task.schedule.model_copy(update={"scheduled_for": None})
             updated = self._evolve_task(
                 task,
@@ -1042,8 +1087,8 @@ class GtdService:
             ):
                 raise InvalidTransitionError(f"Task {task.id} is not waiting for a response")
             now = utc_now()
-            interaction = WaitingInteraction(
-                id=f"INT-{len(waiting.interactions) + 1}",
+            interaction = self._waiting_interaction(
+                waiting,
                 kind=WaitingInteractionKind.FOLLOW_UP,
                 occurred_at=now,
                 note=note,
@@ -1100,8 +1145,8 @@ class GtdService:
             if not target:
                 raise InvalidTransitionError("Escalation requires escalation_to")
             now = utc_now()
-            interaction = WaitingInteraction(
-                id=f"INT-{len(waiting.interactions) + 1}",
+            interaction = self._waiting_interaction(
+                waiting,
                 kind=WaitingInteractionKind.ESCALATED,
                 occurred_at=now,
                 note=note,
@@ -1161,8 +1206,8 @@ class GtdService:
                     "A resolved waiting response cannot schedule another follow-up"
                 )
             now = utc_now()
-            interaction = WaitingInteraction(
-                id=f"INT-{len(waiting.interactions) + 1}",
+            interaction = self._waiting_interaction(
+                waiting,
                 kind=WaitingInteractionKind.RESPONSE,
                 occurred_at=now,
                 note=note,
@@ -1237,8 +1282,9 @@ class GtdService:
             if task.status is TaskStatus.DOING:
                 task = self._stop_task_unlocked(task.id)
                 record = self._task_record(task.id)
-            schedule = TaskSchedule.model_validate(
-                {**task.schedule.model_dump(mode="json"), "scheduled_for": scheduled_for}
+            schedule = self._evolve_schedule(
+                task.schedule,
+                scheduled_for=scheduled_for,
             )
             updated = self._evolve_task(
                 task,
@@ -1268,8 +1314,9 @@ class GtdService:
             if task.status is TaskStatus.DOING:
                 task = self._stop_task_unlocked(task.id)
                 record = self._task_record(task.id)
-            schedule = TaskSchedule.model_validate(
-                {**task.schedule.model_dump(mode="json"), "not_before": not_before}
+            schedule = self._evolve_schedule(
+                task.schedule,
+                not_before=not_before,
             )
             updated = self._evolve_task(
                 task,
@@ -1293,9 +1340,7 @@ class GtdService:
             record = self._task_record(task_id)
             task = record.entity
             self._require_open(task, "set a due date on")
-            schedule = TaskSchedule.model_validate(
-                {**task.schedule.model_dump(mode="json"), "due_on": due_on}
-            )
+            schedule = self._evolve_schedule(task.schedule, due_on=due_on)
             updated = self._evolve_task(
                 task,
                 schedule=schedule.model_dump(mode="json", exclude_none=True),
@@ -1577,7 +1622,8 @@ class GtdService:
         )
 
     def daily_dashboard(self, *, today: date | None = None) -> DailyDashboard:
-        day = today or utc_now().date()
+        timezone = ZoneInfo(self.workspace.settings().timezone)
+        day = today or utc_now().astimezone(timezone).date()
         tasks = [task for task in self.list_tasks() if task.lifecycle is TaskLifecycle.OPEN]
 
         def refs(items: Iterable[Task]) -> list[EntityRef]:
@@ -1598,17 +1644,16 @@ class GtdService:
             if task.waiting is not None
             and task.waiting.escalation_on is not None
             and task.waiting.escalation_on <= day
-            and task.waiting.last_escalated_at is None
         ]
         scheduled = [
             task
             for task in tasks
             if task.disposition is TaskDisposition.CALENDAR
             and task.scheduled_for is not None
-            and _ensure_aware(task.scheduled_for).date() == day
+            and _ensure_aware(task.scheduled_for).astimezone(timezone).date() == day
         ]
         blocked = [task for task in tasks if task.status is TaskStatus.BLOCKED]
-        as_of = datetime.combine(day, time.max, tzinfo=UTC)
+        as_of = datetime.combine(day, time.max, tzinfo=timezone)
         current = self.current_task()
         return DailyDashboard(
             day=day,
@@ -1801,7 +1846,7 @@ class GtdService:
             )
             timer_minutes = max(round(duration_seconds / 60, 6), 0.000001)
             timer_log = WorkLog(
-                id=f"WL-{len(work_logs) + 1}",
+                id=_next_sequence_id("WL", (item.id for item in work_logs)),
                 minutes=timer_minutes,
                 source=WorkLogSource.TIMER,
                 started_at=task.started_at,
@@ -2041,14 +2086,10 @@ class GtdService:
         if task.status is TaskStatus.DOING:
             task = self._stop_task_unlocked(task.id)
             record = self._task_record(task.id)
-        existing_blocker_ids = {blocker.id for blocker in task.blockers}
-        blocker_number = 1
-        while f"BLK-{blocker_number}" in existing_blocker_ids:
-            blocker_number += 1
         blockers = [
             *task.blockers,
             TaskBlocker(
-                id=f"BLK-{blocker_number}",
+                id=_next_sequence_id("BLK", (item.id for item in task.blockers)),
                 description=reason.strip(),
             ),
         ]
@@ -2367,8 +2408,8 @@ class GtdService:
 
     def weekly_review(self, review_id: str | None = None) -> ReviewReport:
         now = utc_now()
-        today = now.date()
         settings = self.workspace.settings()
+        today = now.astimezone(ZoneInfo(settings.timezone)).date()
         session = (
             self._weekly_review_record(review_id).entity
             if review_id is not None

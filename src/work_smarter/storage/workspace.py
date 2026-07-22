@@ -12,9 +12,10 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, TypeVar
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from work_smarter.errors import (
     AmbiguousEntityError,
@@ -27,13 +28,24 @@ from work_smarter.storage.frontmatter import read_markdown, write_markdown
 
 
 class WorkspaceSettings(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
     workspace_version: int = 1
     name: str
     features: list[str] = Field(default_factory=lambda: ["gtd"])
     wip_limit: Literal[1] = 1
     stale_after_days: int = Field(default=14, ge=1)
+    timezone: str = "UTC"
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, value: str) -> str:
+        cleaned = value.strip()
+        try:
+            ZoneInfo(cleaned)
+        except (ValueError, ZoneInfoNotFoundError) as exc:
+            raise ValueError(f"unknown IANA timezone: {value!r}") from exc
+        return cleaned
 
 
 EntityT = TypeVar("EntityT", bound=BaseModel)

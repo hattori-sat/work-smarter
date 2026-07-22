@@ -159,6 +159,21 @@ def test_daily_dashboard_surfaces_due_follow_up_escalation_and_tickler(
     assert tickler_id in [item.id for item in dashboard.available_actions]
 
 
+def test_daily_dashboard_uses_workspace_timezone_for_calendar_boundaries(
+    service: GtdService,
+    workspace: Workspace,
+) -> None:
+    settings = workspace.settings()
+    settings.timezone = "Asia/Tokyo"
+    workspace._write_config(settings)
+    task_id = service.add_next_action("Attend the local morning review").created[0].id
+    service.schedule_task(task_id, scheduled_for="2026-07-22T15:30:00Z")
+
+    dashboard = service.daily_dashboard(today=date(2026, 7, 23))
+
+    assert [item.id for item in dashboard.scheduled_today] == [task_id]
+
+
 def test_weekly_review_has_a_systematic_checklist(service: GtdService) -> None:
     service.capture("Unclarified input")
 
@@ -272,6 +287,32 @@ def test_escalation_records_party_and_clears_the_consumed_deadline(
     assert escalated.waiting.escalation_on is None
     assert escalated.waiting.interactions[-1].party == "Director"
     assert service.daily_dashboard(today=date(2026, 7, 24)).escalations_due == []
+
+    rescheduled = service.escalate_waiting(
+        task_id,
+        note="Set the next escalation checkpoint",
+        next_escalation_on=date(2026, 7, 25),
+    )
+    assert rescheduled.waiting is not None
+    assert rescheduled.waiting.escalation_on == date(2026, 7, 25)
+    assert [
+        item.id for item in service.daily_dashboard(today=date(2026, 7, 25)).escalations_due
+    ] == [task_id]
+
+
+def test_invalid_waiting_transition_leaves_task_and_events_unchanged(
+    service: GtdService,
+    workspace: Workspace,
+) -> None:
+    task_id = service.add_next_action("Wait safely").created[0].id
+    delegated = service.delegate_task(task_id, target="Owner")
+    event_count = len(workspace.event_store.read_all())
+
+    with pytest.raises(InvalidTransitionError, match="cannot be blank"):
+        service.follow_up_waiting(task_id, note=" ")
+
+    assert service.get_task(task_id).revision == delegated.revision
+    assert len(workspace.event_store.read_all()) == event_count
 
 
 def test_weekly_review_session_is_resumable_and_requires_checked_steps(
