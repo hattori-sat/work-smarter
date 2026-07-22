@@ -32,10 +32,13 @@ from work_smarter.gtd.models import (
     GtdProject,
     InboxItem,
     MetricsReport,
+    RelationType,
     ReviewReport,
     StatusReport,
     Task,
+    TaskRigor,
     ValidationReport,
+    WorkType,
 )
 from work_smarter.gtd.service import GtdService
 
@@ -65,6 +68,14 @@ class ClarifyRequest(ApiModel):
     not_before: datetime | None = None
     follow_up_on: date | None = None
     due_on: date | None = None
+    work_type: WorkType | None = None
+    rigor: TaskRigor | None = None
+    goal: str | None = None
+    why: str | None = None
+    desired_outcome: str | None = None
+    constraints: list[str] | None = None
+    assumptions: list[str] | None = None
+    risks: list[str] | None = None
 
 
 class StartRequest(ApiModel):
@@ -73,6 +84,31 @@ class StartRequest(ApiModel):
 
 class BlockRequest(ApiModel):
     reason: str = Field(min_length=1)
+
+
+class CompleteRequest(ApiModel):
+    waiver_reason: str | None = None
+
+
+class TaskDefinitionRequest(ApiModel):
+    work_type: WorkType | None = None
+    rigor: TaskRigor | None = None
+    goal: str | None = None
+    why: str | None = None
+    desired_outcome: str | None = None
+    constraints: list[str] | None = None
+    assumptions: list[str] | None = None
+    risks: list[str] | None = None
+    completion_criteria: list[str] | None = None
+
+
+class ConditionCheckRequest(ApiModel):
+    evidence: str | None = None
+
+
+class TaskLinkRequest(ApiModel):
+    target_id: str = Field(min_length=1)
+    relation_type: RelationType
 
 
 class QuickAddRequest(ApiModel):
@@ -86,6 +122,14 @@ class QuickAddRequest(ApiModel):
     completion_criteria: list[str] = Field(default_factory=list)
     not_before: datetime | None = None
     due_on: date | None = None
+    work_type: WorkType | None = None
+    rigor: TaskRigor | None = None
+    goal: str | None = None
+    why: str | None = None
+    desired_outcome: str | None = None
+    constraints: list[str] | None = None
+    assumptions: list[str] | None = None
+    risks: list[str] | None = None
 
 
 def create_gtd_router(service_dependency: Any) -> APIRouter:
@@ -130,6 +174,49 @@ def create_gtd_router(service_dependency: Any) -> APIRouter:
             **fields,
         )
 
+    @router.get("/tasks/{task_id}")
+    def get_task(
+        task_id: str,
+        service: GtdService = service_dep,
+    ) -> Task:
+        return service.get_task(task_id)
+
+    @router.patch("/tasks/{task_id}")
+    def define_task(
+        task_id: str,
+        payload: TaskDefinitionRequest,
+        service: GtdService = service_dep,
+    ) -> Task:
+        return service.define_task(
+            task_id,
+            **payload.model_dump(exclude_none=True),
+        )
+
+    @router.post("/tasks/{task_id}/completion/{condition_id}")
+    def check_completion_condition(
+        task_id: str,
+        condition_id: str,
+        payload: ConditionCheckRequest | None = None,
+        service: GtdService = service_dep,
+    ) -> Task:
+        return service.check_completion_condition(
+            task_id,
+            condition_id,
+            evidence=payload.evidence if payload else None,
+        )
+
+    @router.post("/tasks/{task_id}/links")
+    def link_tasks(
+        task_id: str,
+        payload: TaskLinkRequest,
+        service: GtdService = service_dep,
+    ) -> Task:
+        return service.link_tasks(
+            task_id,
+            payload.target_id,
+            relation_type=payload.relation_type,
+        )
+
     @router.get("/status")
     def status(service: GtdService = service_dep) -> StatusReport:
         return service.status()
@@ -169,9 +256,13 @@ def create_gtd_router(service_dependency: Any) -> APIRouter:
     @router.post("/tasks/{task_id}/complete")
     def complete_task(
         task_id: str,
+        payload: CompleteRequest | None = None,
         service: GtdService = service_dep,
     ) -> CompletionResult:
-        return service.complete_task(task_id)
+        return service.complete_task(
+            task_id,
+            waiver_reason=payload.waiver_reason if payload else None,
+        )
 
     @router.post("/tasks/{task_id}/block")
     def block_task(
