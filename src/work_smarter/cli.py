@@ -14,11 +14,15 @@ from work_smarter.composition import initialize_workspace, open_workspace
 from work_smarter.errors import WorkSmarterError
 from work_smarter.gtd.models import (
     ClarifyDecision,
+    Commitment,
     Energy,
+    Impact,
+    RecurrenceFrequency,
     RelationType,
     ReviewReport,
     Task,
     TaskRigor,
+    Urgency,
     WorkType,
 )
 from work_smarter.gtd.service import GtdService
@@ -92,6 +96,24 @@ def _show_task_ticket(task: Task) -> None:
     typer.echo(
         f"Type: {task.work_type.value} | Rigor: {task.rigor.value} | Status: {task.status.value}"
     )
+    typer.echo(
+        f"Urgency: {task.urgency.value} | Impact: {task.impact.value} | "
+        f"Commitment: {task.commitment.value}"
+    )
+    original = task.original_estimate_minutes or "-"
+    remaining = (
+        task.remaining_estimate_minutes if task.remaining_estimate_minutes is not None else "-"
+    )
+    typer.echo(
+        f"Estimate: original={original}m, remaining={remaining}m, actual={task.actual_minutes:g}m"
+    )
+    if task.parent_id:
+        typer.echo(f"Parent: {task.parent_id}")
+    if task.recurrence:
+        typer.echo(
+            f"Recurrence: every {task.recurrence.interval} "
+            f"{task.recurrence.frequency.value}; next={task.next_occurrence_on}"
+        )
     for label, value in (
         ("Goal", task.goal),
         ("Why", task.why),
@@ -146,6 +168,12 @@ def task_define(
         TaskRigor | None,
         typer.Option(case_sensitive=False, help="Required completion rigor."),
     ] = None,
+    urgency: Annotated[Urgency | None, typer.Option(case_sensitive=False)] = None,
+    impact: Annotated[Impact | None, typer.Option(case_sensitive=False)] = None,
+    commitment: Annotated[
+        Commitment | None,
+        typer.Option(case_sensitive=False),
+    ] = None,
     goal: Annotated[str | None, typer.Option(help="State to make true.")] = None,
     why: Annotated[str | None, typer.Option(help="Reason this work matters.")] = None,
     outcome: Annotated[
@@ -156,6 +184,14 @@ def task_define(
     assumption: Annotated[list[str] | None, typer.Option("--assumption")] = None,
     risk: Annotated[list[str] | None, typer.Option("--risk")] = None,
     criterion: Annotated[list[str] | None, typer.Option("--criterion")] = None,
+    original_estimate: Annotated[
+        int | None,
+        typer.Option("--estimate", min=1, help="Original estimate in minutes."),
+    ] = None,
+    remaining_estimate: Annotated[
+        int | None,
+        typer.Option("--remaining", min=0, help="Current remaining estimate."),
+    ] = None,
 ) -> None:
     """Define intent and completion gates without editing or moving Markdown."""
 
@@ -163,6 +199,9 @@ def task_define(
         task_id,
         work_type=work_type,
         rigor=rigor,
+        urgency=urgency,
+        impact=impact,
+        commitment=commitment,
         goal=goal,
         why=why,
         desired_outcome=outcome,
@@ -170,6 +209,8 @@ def task_define(
         assumptions=assumption,
         risks=risk,
         completion_criteria=criterion,
+        original_estimate_minutes=original_estimate,
+        remaining_estimate_minutes=remaining_estimate,
     )
     if _state(ctx).json_output:
         _emit(ctx, task)
@@ -199,6 +240,16 @@ def task_check(
     )
 
 
+@task_app.command("assure")
+def task_assure(
+    ctx: typer.Context,
+    task_id: Annotated[str, typer.Argument(help="Task ID or unique prefix.")],
+) -> None:
+    """Confirm an assured task's constraints and assumptions were reviewed."""
+
+    _emit(ctx, _service(ctx).review_task_assurance(task_id))
+
+
 @task_app.command("link")
 def task_link(
     ctx: typer.Context,
@@ -217,6 +268,73 @@ def task_link(
             source_id,
             target_id,
             relation_type=relation_type,
+        ),
+    )
+
+
+@task_app.command("parent")
+def task_parent(
+    ctx: typer.Context,
+    task_id: Annotated[str, typer.Argument(help="Child task ID or prefix.")],
+    parent_id: Annotated[
+        str | None,
+        typer.Argument(help="Parent task ID; omit to clear."),
+    ] = None,
+) -> None:
+    """Set or clear task decomposition without adding an execution dependency."""
+
+    _emit(ctx, _service(ctx).set_task_parent(task_id, parent_id))
+
+
+@task_app.command("log")
+def task_log(
+    ctx: typer.Context,
+    task_id: Annotated[str, typer.Argument(help="Task ID or prefix.")],
+    minutes: Annotated[float, typer.Argument(min=0.01, help="Actual minutes worked.")],
+    note: Annotated[str | None, typer.Option(help="What was accomplished.")] = None,
+) -> None:
+    """Append manual effort to a task's durable work history."""
+
+    _emit(ctx, _service(ctx).log_work(task_id, minutes=minutes, note=note))
+
+
+@task_app.command("estimate")
+def task_estimate(
+    ctx: typer.Context,
+    task_id: Annotated[str, typer.Argument(help="Task ID or prefix.")],
+    minutes: Annotated[int, typer.Argument(min=0, help="Remaining minutes.")],
+    reason: Annotated[str, typer.Option(help="Why the forecast changed.")],
+) -> None:
+    """Revise remaining work while preserving the original estimate."""
+
+    _emit(
+        ctx,
+        _service(ctx).set_remaining_estimate(task_id, minutes=minutes, reason=reason),
+    )
+
+
+@task_app.command("repeat")
+def task_repeat(
+    ctx: typer.Context,
+    task_id: Annotated[str, typer.Argument(help="Task ID or prefix.")],
+    frequency: Annotated[
+        RecurrenceFrequency,
+        typer.Option(case_sensitive=False),
+    ],
+    interval: Annotated[int, typer.Option(min=1)] = 1,
+    anchor_on: Annotated[str | None, typer.Option("--anchor")] = None,
+    until_on: Annotated[str | None, typer.Option("--until")] = None,
+) -> None:
+    """Generate a fresh task ID after each recurring occurrence completes."""
+
+    _emit(
+        ctx,
+        _service(ctx).set_recurrence(
+            task_id,
+            frequency=frequency,
+            interval=interval,
+            anchor_on=anchor_on,
+            until_on=until_on,
         ),
     )
 
@@ -466,7 +584,12 @@ def focus(
         typer.echo("No eligible next action.")
         return
     for index, task in enumerate(tasks, start=1):
-        estimate = f" {task.estimate_minutes}m" if task.estimate_minutes else ""
+        effort = (
+            task.remaining_estimate_minutes
+            if task.remaining_estimate_minutes is not None
+            else task.estimate_minutes
+        )
+        estimate = f" {effort}m" if effort is not None else ""
         contexts = f" [{' '.join(task.contexts)}]" if task.contexts else ""
         typer.echo(f"{index:>2}. {task.id}  {task.title}{estimate}{contexts}")
 
@@ -527,10 +650,14 @@ def stop(
 def complete(
     ctx: typer.Context,
     task_id: Annotated[str, typer.Argument(help="Task ID or unique prefix.")],
+    waiver_reason: Annotated[
+        str | None,
+        typer.Option("--waiver", help="Explain an exceptional completion."),
+    ] = None,
 ) -> None:
     """Complete a task and surface a project that now lacks a next action."""
 
-    result = _service(ctx).complete_task(task_id)
+    result = _service(ctx).complete_task(task_id, waiver_reason=waiver_reason)
     if _state(ctx).json_output:
         _emit(ctx, result)
         return

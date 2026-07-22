@@ -174,3 +174,52 @@ def test_api_creates_a_directional_task_link(tmp_path: Path) -> None:
 
         assert linked.status_code == 200
         assert linked.json()["relations"] == [{"type": "blocks", "target_id": task_ids[1]}]
+
+
+def test_api_manages_parent_effort_priority_and_recurrence(tmp_path: Path) -> None:
+    with TestClient(create_app(tmp_path)) as client:
+        client.post("/api/workspace/init")
+        parent_id, task_id = [
+            client.post("/api/gtd/tasks", json={"text": title}).json()["created"][0]["id"]
+            for title in ("Prepare review", "Inspect evidence")
+        ]
+
+        defined = client.patch(
+            f"/api/gtd/tasks/{task_id}",
+            json={
+                "urgency": "high",
+                "impact": "high",
+                "commitment": "committed",
+                "original_estimate_minutes": 60,
+            },
+        )
+        assert defined.json()["remaining_estimate_minutes"] == 60
+
+        parented = client.put(
+            f"/api/gtd/tasks/{task_id}/parent",
+            json={"parent_id": parent_id},
+        )
+        assert parented.json()["parent_id"] == parent_id
+
+        logged = client.post(
+            f"/api/gtd/tasks/{task_id}/work-logs",
+            json={"minutes": 15, "note": "Inspected first trace"},
+        )
+        assert logged.json()["actual_minutes"] == 15
+
+        estimated = client.patch(
+            f"/api/gtd/tasks/{task_id}/remaining-estimate",
+            json={"minutes": 30, "reason": "One more environment remains"},
+        )
+        assert estimated.json()["original_estimate_minutes"] == 60
+        assert estimated.json()["remaining_estimate_minutes"] == 30
+
+        recurring = client.put(
+            f"/api/gtd/tasks/{task_id}/recurrence",
+            json={
+                "frequency": "weekly",
+                "interval": 1,
+                "anchor_on": "2026-07-23",
+            },
+        )
+        assert recurring.json()["next_occurrence_on"] == "2026-07-30"

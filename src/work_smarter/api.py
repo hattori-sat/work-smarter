@@ -27,16 +27,20 @@ from work_smarter.errors import (
 from work_smarter.gtd.models import (
     ClarifyDecision,
     ClarifyResult,
+    Commitment,
     CompletionResult,
     Energy,
     GtdProject,
+    Impact,
     InboxItem,
     MetricsReport,
+    RecurrenceFrequency,
     RelationType,
     ReviewReport,
     StatusReport,
     Task,
     TaskRigor,
+    Urgency,
     ValidationReport,
     WorkType,
 )
@@ -76,6 +80,9 @@ class ClarifyRequest(ApiModel):
     constraints: list[str] | None = None
     assumptions: list[str] | None = None
     risks: list[str] | None = None
+    urgency: Urgency | None = None
+    impact: Impact | None = None
+    commitment: Commitment | None = None
 
 
 class StartRequest(ApiModel):
@@ -100,6 +107,11 @@ class TaskDefinitionRequest(ApiModel):
     assumptions: list[str] | None = None
     risks: list[str] | None = None
     completion_criteria: list[str] | None = None
+    urgency: Urgency | None = None
+    impact: Impact | None = None
+    commitment: Commitment | None = None
+    original_estimate_minutes: int | None = Field(default=None, gt=0)
+    remaining_estimate_minutes: int | None = Field(default=None, ge=0)
 
 
 class ConditionCheckRequest(ApiModel):
@@ -109,6 +121,27 @@ class ConditionCheckRequest(ApiModel):
 class TaskLinkRequest(ApiModel):
     target_id: str = Field(min_length=1)
     relation_type: RelationType
+
+
+class TaskParentRequest(ApiModel):
+    parent_id: str | None = None
+
+
+class WorkLogRequest(ApiModel):
+    minutes: float = Field(gt=0)
+    note: str | None = None
+
+
+class RemainingEstimateRequest(ApiModel):
+    minutes: int = Field(ge=0)
+    reason: str = Field(min_length=1)
+
+
+class RecurrenceRequest(ApiModel):
+    frequency: RecurrenceFrequency
+    interval: int = Field(default=1, ge=1)
+    anchor_on: date | None = None
+    until_on: date | None = None
 
 
 class QuickAddRequest(ApiModel):
@@ -130,6 +163,9 @@ class QuickAddRequest(ApiModel):
     constraints: list[str] | None = None
     assumptions: list[str] | None = None
     risks: list[str] | None = None
+    urgency: Urgency | None = None
+    impact: Impact | None = None
+    commitment: Commitment | None = None
 
 
 def create_gtd_router(service_dependency: Any) -> APIRouter:
@@ -205,6 +241,13 @@ def create_gtd_router(service_dependency: Any) -> APIRouter:
             evidence=payload.evidence if payload else None,
         )
 
+    @router.post("/tasks/{task_id}/assurance-review")
+    def review_task_assurance(
+        task_id: str,
+        service: GtdService = service_dep,
+    ) -> Task:
+        return service.review_task_assurance(task_id)
+
     @router.post("/tasks/{task_id}/links")
     def link_tasks(
         task_id: str,
@@ -215,6 +258,45 @@ def create_gtd_router(service_dependency: Any) -> APIRouter:
             task_id,
             payload.target_id,
             relation_type=payload.relation_type,
+        )
+
+    @router.put("/tasks/{task_id}/parent")
+    def set_task_parent(
+        task_id: str,
+        payload: TaskParentRequest,
+        service: GtdService = service_dep,
+    ) -> Task:
+        return service.set_task_parent(task_id, payload.parent_id)
+
+    @router.post("/tasks/{task_id}/work-logs")
+    def log_work(
+        task_id: str,
+        payload: WorkLogRequest,
+        service: GtdService = service_dep,
+    ) -> Task:
+        return service.log_work(task_id, minutes=payload.minutes, note=payload.note)
+
+    @router.patch("/tasks/{task_id}/remaining-estimate")
+    def set_remaining_estimate(
+        task_id: str,
+        payload: RemainingEstimateRequest,
+        service: GtdService = service_dep,
+    ) -> Task:
+        return service.set_remaining_estimate(
+            task_id,
+            minutes=payload.minutes,
+            reason=payload.reason,
+        )
+
+    @router.put("/tasks/{task_id}/recurrence")
+    def set_recurrence(
+        task_id: str,
+        payload: RecurrenceRequest,
+        service: GtdService = service_dep,
+    ) -> Task:
+        return service.set_recurrence(
+            task_id,
+            **payload.model_dump(exclude_none=True),
         )
 
     @router.get("/status")
