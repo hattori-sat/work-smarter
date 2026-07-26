@@ -150,13 +150,14 @@ main
 - [x] command/task snippets for capture/add/status/focus/review
 - [x] workspace recommendations and keybinding examples
 - [x] typed OpenAPI schema/client contract
-- [ ] cross-feature dashboard
-- [ ] export/import/backup and migration commands
+- [x] cross-feature dashboard
+- [x] checksummed export/import/backup and schema migration commands
 
 ### M7 Release quality — `feat/release-quality`
 
-- [ ] user journey acceptance tests
-- [ ] corrupt/crash/concurrency/recovery tests
+- [x] cross-feature user journey acceptance tests
+- [ ] corrupt/crash/concurrency/recovery tests（single-file atomicityとconcurrencyはcovered。
+  multi-file crash recoveryはUNKNOWN）
 - [ ] package install and clean-room smoke test
 - [ ] user manual完成
 - [ ] developer architecture/API/contribution manual完成

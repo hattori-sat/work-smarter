@@ -37,3 +37,5 @@ python3.12 -m venv .venv
 - [Feature contract ADR](../architecture/0002-feature-contract.md)
 
 public interfaceを変更した場合はCLI help、OpenAPI、user docs、schema migrationの4点を確認します。
+
+Release前の検証と既知の制約は [release checklist](release.md) に集約します。
