@@ -4,6 +4,7 @@
 
 - entityの現在状態: Markdown + YAML frontmatter
 - 操作・timer・reviewの履歴: `.work-smarter/events.ndjson`
+- Knowledge search/backlink: 現在のMarkdownから都度再構築するprojection
 - 将来追加するSQLite/検索index/view: 破棄して再構築できるprojection
 
 ## Directory ownership
@@ -15,11 +16,13 @@
 | `gtd/projects/` | GTD | 複数actionを必要とするoutcome |
 | `someday/` | GTD | someday/maybe |
 | `knowledge/gtd/` | GTD | clarifyでreference化した文書 |
-| `knowledge/`のその他 | user/future knowledge feature | GTD doctorの管理外 |
+| `knowledge/notes/` | Knowledge | independent knowledge note |
 | `archive/inbox/` | GTD | raw captureとclarify disposition |
 | `templates/gtd/` | GTD/user | body template |
+| `templates/knowledge/` | Knowledge/user | note type別body template |
 | `.work-smarter/` | core | config、監査event、lock、将来のprovider state |
 
+`knowledge/gtd/`と`knowledge/notes/`は同じ親directoryにあるが、前者はGTD、後者はKnowledgeが所有する。
 Project management featureは `gtd/projects/` を再利用しない。
 
 ## Markdown entity
@@ -77,16 +80,65 @@ Rules:
 - taskからGTD projectへの参照はstable `project_id`を使う。
 - timezoneなしdatetimeは読み込めるが、applicationが生成する時刻はUTC awareとする。
 
+### Knowledge note schema v1
+
+Knowledge noteは`knowledge/notes/<id>.md`へ保存する。
+
+```markdown
+---
+schema_version: 1
+id: KN-8A2F1C77B410
+kind: knowledge_note
+note_type: decision
+title: Canary release decision
+tags:
+- release
+aliases:
+- ship-plan
+links:
+- target_id: TASK-20260723-102030-A1B2C3
+  relation: supports
+  label: Execution evidence
+sources:
+- kind: url
+  locator: https://example.com/runbook
+  title: Release runbook
+created_at: '2026-07-23T01:20:30Z'
+updated_at: '2026-07-23T01:25:00Z'
+revision: 2
+---
+
+## Context
+
+Canaryの結果を見て段階的にreleaseする。
+
+## Decision
+
+最初に5%へreleaseする。
+```
+
+Knowledge固有rule:
+
+- `note_type`は`note`, `decision`, `how_to`, `reference`, `meeting_note`のいずれか。
+- tagはtrim、lowercase、unique、sortされる。
+- aliasはcase-insensitiveにKnowledge note間で一意である。
+- linkはworkspace entityのstable IDをtargetにし、self/missing/ambiguous/duplicate target relationを拒否する。
+- source kindは`entity`, `url`, `file`, `citation`, `other`のいずれか。
+- `created_at`と`updated_at`はtimezone-awareで、`revision`はupdateごとに増える。
+- backlinkはfrontmatterに保存せず、全noteのoutbound linkから導出する。
+
 ## Direct edits
 
 本文とfrontmatterはVS Codeで直接編集できる。編集後は次を実行する。
 
 ```bash
 ws doctor
+ws knowledge doctor
 ```
 
-doctorはschema、duplicate ID、filename/ID、kind/directory、missing relation/project、dependency cycle、
-work-log projection、WIP、監査logを検証する。
+`ws doctor`はschema、duplicate ID、filename/ID、kind/directory、GTD relation/project、dependency cycle、
+work-log projection、WIP、監査logを検証する。`ws knowledge doctor`はKnowledge graphのorphan、broken、
+duplicate、ambiguous linkを検証する。
 状態遷移の監査を残したい変更はCLI/APIから行う。
 
 ## Templates
@@ -95,9 +147,15 @@ work-log projection、WIP、監査logを検証する。
 
 - `templates/gtd/task.md`
 - `templates/gtd/project.md`
+- `templates/knowledge/note.md`
+- `templates/knowledge/decision.md`
+- `templates/knowledge/how_to.md`
+- `templates/knowledge/reference.md`
+- `templates/knowledge/meeting_note.md`
 
-`{{ intent }}`、`{{ outcome }}`、`{{ source_id }}` が置換される。templateはfrontmatterではなく本文だけを
-定義するため、schema invariantはapplicationが保持する。
+GTD templateでは`{{ intent }}`、`{{ outcome }}`、`{{ source_id }}` が置換される。Knowledge templateでは
+現在`{{ title }}`を利用できる。templateはfrontmatterではなく本文だけを定義するため、schema invariantは
+applicationが保持する。
 
 ## Events
 
@@ -116,8 +174,15 @@ work-log projection、WIP、監査logを検証する。
 
 0.1では監査履歴であり、feature間deliveryを保証するmessage busではない。
 
+Knowledgeが追記するevent typeは次の3件である。
+
+- `knowledge.note.created`
+- `knowledge.note.updated`
+- `knowledge.note.promoted`
+
 ## Compatibility
 
 Task schema v1/v2はread時にv3へlazy migrationし、次回writeでv3として保存する。既に完了済みの
 v2 rigorous taskは新しいassurance gateで読めなくならないよう、frontmatterにgrandfather markerを
-明示する。その他entityと未対応versionは自動推測せずvalidation errorにする。
+明示する。Knowledgeはschema version 1だけを受け付け、migrationはまだない。その他entityと未対応versionは
+自動推測せずvalidation errorにする。

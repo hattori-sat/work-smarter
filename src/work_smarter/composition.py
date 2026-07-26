@@ -8,11 +8,13 @@ from pathlib import Path
 from work_smarter.errors import InvalidDocumentError
 from work_smarter.features import Feature, FeatureRegistry, discover_features
 from work_smarter.gtd import GtdFeature
+from work_smarter.knowledge import KnowledgeFeature
 from work_smarter.project_management import ProjectManagementFeature
-from work_smarter.storage.workspace import Workspace
+from work_smarter.storage.workspace import DEFAULT_WORKSPACE_FEATURES, Workspace
 
 BUILTIN_FEATURES: tuple[type[Feature], ...] = (
     GtdFeature,
+    KnowledgeFeature,
     ProjectManagementFeature,
 )
 
@@ -47,7 +49,9 @@ def initialize_workspace(root: Path | str) -> Workspace:
     """Initialize directories for the features enabled by workspace config."""
 
     probe = Workspace(root)
-    enabled = probe.settings().features if probe.config_path.is_file() else ["gtd"]
+    enabled = (
+        probe.settings().features if probe.config_path.is_file() else DEFAULT_WORKSPACE_FEATURES
+    )
     composition = compose_features(enabled)
     workspace = Workspace.initialize(root, composition.entity_registry())
     for initializer in composition.workspace_initializers:

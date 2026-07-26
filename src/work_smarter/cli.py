@@ -12,6 +12,7 @@ from typing import Annotated, Any
 import typer
 
 from work_smarter.composition import initialize_workspace, open_workspace
+from work_smarter.confluence.cli import app as confluence_app
 from work_smarter.errors import WorkSmarterError
 from work_smarter.gtd.models import (
     ClarifyDecision,
@@ -29,6 +30,9 @@ from work_smarter.gtd.models import (
     WorkType,
 )
 from work_smarter.gtd.service import GtdService
+from work_smarter.gtd.tui import run_tui
+from work_smarter.knowledge.cli import app as knowledge_app
+from work_smarter.project_management.cli import app as project_management_app
 
 app = typer.Typer(
     name="ws",
@@ -47,6 +51,15 @@ review_app = typer.Typer(
 )
 app.add_typer(task_app, name="task")
 app.add_typer(review_app, name="review")
+app.add_typer(knowledge_app, name="knowledge")
+app.add_typer(project_management_app, name="pm")
+app.add_typer(confluence_app, name="confluence")
+
+
+@app.command("tui")
+def tui(ctx: typer.Context) -> None:
+    """Open the vim-like GTD terminal interface."""
+    run_tui(_state(ctx).workspace)
 
 
 @dataclass(slots=True)

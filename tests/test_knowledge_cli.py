@@ -1,0 +1,171 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from typer.testing import CliRunner
+
+from work_smarter.cli import app
+
+runner = CliRunner()
+
+
+def _common(workspace: Path) -> list[str]:
+    return ["--workspace", str(workspace), "--json", "knowledge"]
+
+
+def _initialize(workspace: Path) -> None:
+    initialized = runner.invoke(app, ["--workspace", str(workspace), "init"])
+    assert initialized.exit_code == 0, initialized.output
+
+
+def test_knowledge_cli_manages_notes_with_prefixes_and_pure_json(tmp_path: Path) -> None:
+    _initialize(tmp_path)
+    common = _common(tmp_path)
+
+    created = runner.invoke(
+        app,
+        [
+            *common,
+            "add",
+            "Release decision",
+            "--type",
+            "decision",
+            "--body",
+            "# Decision\n\nShip the canary first.",
+            "--tag",
+            "Release",
+            "--alias",
+            "ship-plan",
+            "--source",
+            "url=https://example.com/release",
+        ],
+    )
+    assert created.exit_code == 0, created.output
+    document = json.loads(created.stdout)
+    note_id = document["note"]["id"]
+    assert document["note"]["note_type"] == "decision"
+    assert document["note"]["tags"] == ["release"]
+    assert document["note"]["sources"][0]["kind"] == "url"
+
+    shown = runner.invoke(app, [*common, "show", note_id[:12]])
+    assert shown.exit_code == 0, shown.output
+    assert json.loads(shown.stdout)["note"]["id"] == note_id
+
+    shown_by_alias = runner.invoke(app, [*common, "show", "ship-plan"])
+    assert shown_by_alias.exit_code == 0, shown_by_alias.output
+    assert json.loads(shown_by_alias.stdout)["note"]["id"] == note_id
+
+    updated = runner.invoke(
+        app,
+        [
+            *common,
+            "update",
+            note_id[:12],
+            "--title",
+            "Canary release decision",
+            "--tag",
+            "delivery",
+            "--alias",
+            "canary-plan",
+        ],
+    )
+    assert updated.exit_code == 0, updated.output
+    updated_document = json.loads(updated.stdout)
+    assert updated_document["note"]["title"] == "Canary release decision"
+    assert updated_document["note"]["tags"] == ["delivery"]
+
+    listed = runner.invoke(
+        app,
+        [*common, "list", "--type", "decision", "--tag", "delivery"],
+    )
+    assert listed.exit_code == 0, listed.output
+    assert [item["note"]["id"] for item in json.loads(listed.stdout)] == [note_id]
+
+    searched = runner.invoke(
+        app,
+        [*common, "search", "canary", "--field", "title"],
+    )
+    assert searched.exit_code == 0, searched.output
+    assert json.loads(searched.stdout)[0]["matched_fields"] == ["title"]
+
+
+def test_knowledge_cli_links_and_backlinks_use_human_prefixes(tmp_path: Path) -> None:
+    _initialize(tmp_path)
+    common = _common(tmp_path)
+    target = json.loads(runner.invoke(app, [*common, "add", "Canonical design"]).stdout)
+    source = json.loads(runner.invoke(app, [*common, "add", "Implementation notes"]).stdout)
+    target_id = target["note"]["id"]
+    source_id = source["note"]["id"]
+
+    linked = runner.invoke(
+        app,
+        [
+            *common,
+            "link",
+            source_id[:12],
+            target_id[:12],
+            "--type",
+            "supports",
+            "--label",
+            "Implementation evidence",
+        ],
+    )
+    assert linked.exit_code == 0, linked.output
+    link = json.loads(linked.stdout)["note"]["links"][0]
+    assert link == {
+        "target_id": target_id,
+        "relation": "supports",
+        "label": "Implementation evidence",
+    }
+
+    backlinks = runner.invoke(app, [*common, "backlinks", target_id[:12]])
+    assert backlinks.exit_code == 0, backlinks.output
+    assert json.loads(backlinks.stdout)[0]["source"]["note"]["id"] == source_id
+
+    checked = runner.invoke(app, [*common, "doctor"])
+    assert checked.exit_code == 0, checked.output
+    report = json.loads(checked.stdout)
+    assert report["valid"] is True
+    assert report["counts"]["notes"] == 2
+
+
+def test_knowledge_cli_promotes_any_workspace_record_without_copying_files(
+    tmp_path: Path,
+) -> None:
+    _initialize(tmp_path)
+    task = runner.invoke(
+        app,
+        [
+            "--workspace",
+            str(tmp_path),
+            "--json",
+            "add",
+            "Investigate retry policy",
+            "--tag",
+            "reliability",
+        ],
+    )
+    assert task.exit_code == 0, task.output
+    task_id = json.loads(task.stdout)["created"][0]["id"]
+
+    promoted = runner.invoke(
+        app,
+        [
+            *_common(tmp_path),
+            "promote",
+            task_id[:12],
+            "--type",
+            "reference",
+            "--tag",
+            "investigation",
+            "--alias",
+            "retry-research",
+        ],
+    )
+    assert promoted.exit_code == 0, promoted.output
+    document = json.loads(promoted.stdout)
+    assert document["note"]["title"] == "Investigate retry policy"
+    assert document["note"]["note_type"] == "reference"
+    assert document["note"]["sources"][0]["kind"] == "entity"
+    assert document["note"]["sources"][0]["locator"] == task_id

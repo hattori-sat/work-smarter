@@ -7,9 +7,10 @@ Work SmarterはPython modular monolithです。
 - `work_smarter.storage`: feature-neutral Markdown、JSONL、atomic write、lock
 - `work_smarter.composition`: enabled featureのcodec/hook合成
 - `work_smarter.gtd`: GTD aggregateとworkflow
+- `work_smarter.knowledge`: independent Knowledge schema、graph、search projection
 - `work_smarter.project_management`: managed project boundary
-- `work_smarter.api`: typed HTTP adapter
-- `work_smarter.cli`: keyboard/script adapter
+- `work_smarter.api`: GTDとKnowledge routerをmountするtyped HTTP host
+- `work_smarter.cli`: feature subcommandをmountするkeyboard/script host
 
 新featureはgeneric storageへmodelを追加せず、`EntitySpec`をcomposition rootへ登録します。
 
@@ -26,7 +27,12 @@ python3.12 -m venv .venv
 - [Branching](branching.md)
 - [Testing](testing.md)
 - [Developing the GTD workflow](gtd-workflow.md)
+- [Developing Knowledge](knowledge.md)
+- [Developing project management](project-management.md)
+- [Confluence publishing](confluence.md)
+- [VS Code integration](vscode.md)
 - [GTD workflow specification](../specs/gtd-workflow.md)
+- [Knowledge specification](../specs/knowledge.md)
 - [TASK.md](../../TASK.md)
 - [Feature contract ADR](../architecture/0002-feature-contract.md)
 

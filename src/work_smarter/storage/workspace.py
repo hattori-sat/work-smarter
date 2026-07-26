@@ -26,13 +26,19 @@ from work_smarter.errors import (
 from work_smarter.storage.events import EventStore
 from work_smarter.storage.frontmatter import read_markdown, write_markdown
 
+DEFAULT_WORKSPACE_FEATURES: tuple[str, ...] = (
+    "gtd",
+    "knowledge",
+    "project-management",
+)
+
 
 class WorkspaceSettings(BaseModel):
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
     workspace_version: int = 1
     name: str
-    features: list[str] = Field(default_factory=lambda: ["gtd"])
+    features: list[str] = Field(default_factory=lambda: list(DEFAULT_WORKSPACE_FEATURES))
     wip_limit: Literal[1] = 1
     stale_after_days: int = Field(default=14, ge=1)
     timezone: str = "UTC"

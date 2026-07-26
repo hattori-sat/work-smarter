@@ -1,0 +1,4 @@
+{
+  "files.associations": {"*.md": "markdown"},
+  "markdown.validate.enabled": true
+}

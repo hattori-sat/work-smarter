@@ -4,6 +4,7 @@
 
 - [User guide](user/README.md)
 - [GTD workflow](user/gtd-workflow.md)
+- [Knowledge guide](user/knowledge.md)
 - [Workspace and Markdown](user/workspace.md)
 
 ## 開発者向け
@@ -12,7 +13,9 @@
 - [Branching and delivery](development/branching.md)
 - [Testing strategy](development/testing.md)
 - [Developing the GTD workflow](development/gtd-workflow.md)
+- [Developing the Knowledge feature](development/knowledge.md)
 - [GTD workflow specification](specs/gtd-workflow.md)
+- [Knowledge feature specification](specs/knowledge.md)
 - [Architecture decisions](architecture/0001-text-first-modular-monolith.md)
 - [Feature contract](architecture/0002-feature-contract.md)
 - [Product specifications](product/)
