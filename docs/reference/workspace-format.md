@@ -124,7 +124,7 @@ Canaryの結果を見て段階的にreleaseする。
 
 Knowledge固有rule:
 
-- `note_type`は`note`, `decision`, `how_to`, `reference`, `meeting_note`のいずれか。
+- `note_type`は`note`, `decision`, `how_to`, `reference`, `meeting_note`, `technical_report`のいずれか。
 - tagはtrim、lowercase、unique、sortされる。
 - aliasはcase-insensitiveにKnowledge note間で一意である。
 - linkはworkspace entityのstable IDをtargetにし、self/missing/ambiguous/duplicate target relationを拒否する。
@@ -157,6 +157,7 @@ duplicate、ambiguous linkを検証する。
 - `templates/knowledge/how_to.md`
 - `templates/knowledge/reference.md`
 - `templates/knowledge/meeting_note.md`
+- `templates/knowledge/technical_report.md`
 
 GTD templateでは`{{ intent }}`、`{{ outcome }}`、`{{ source_id }}` が置換される。Knowledge templateでは
 現在`{{ title }}`を利用できる。templateはfrontmatterではなく本文だけを定義するため、schema invariantは

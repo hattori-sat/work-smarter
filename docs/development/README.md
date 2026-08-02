@@ -13,6 +13,7 @@ SQLiteへ曖昧な二重書込みを行いません。
 - `work_smarter.composition`: enabled featureのcodec/hook合成
 - `work_smarter.gtd`: GTD aggregateとworkflow
 - `work_smarter.knowledge`: independent Knowledge schema、graph、search projection
+- `work_smarter.knowledge.presentations`: read-only Marp presentation projection
 - `work_smarter.project_management`: managed project boundary
 - `work_smarter.api`: GTDとKnowledge routerをmountするtyped HTTP host
 - `work_smarter.cli`: feature subcommandをmountするkeyboard/script host
@@ -34,6 +35,7 @@ python3.12 -m venv .venv
 - [Testing](testing.md)
 - [Database persistence and SQL safety](database.md)
 - [Selectable database adapters ADR](../architecture/0004-selectable-database-adapters.md)
+- [Marp technical report projection ADR](../architecture/0005-marp-technical-reports-as-projections.md)
 - [Developing the GTD workflow](gtd-workflow.md)
 - [Developing Knowledge](knowledge.md)
 - [Developing project management](project-management.md)

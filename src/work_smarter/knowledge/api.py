@@ -16,8 +16,10 @@ from work_smarter.knowledge.models import (
     KnowledgeLink,
     KnowledgeLinkType,
     KnowledgeNoteType,
+    KnowledgePresentationMode,
     KnowledgeSearchField,
     KnowledgeSearchHit,
+    MarpPresentation,
     SourceReference,
     SourceReferenceKind,
 )
@@ -25,6 +27,15 @@ from work_smarter.knowledge.service import KnowledgeService
 from work_smarter.storage.workspace import validate_entity_id
 
 NonBlankString = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+MarpTheme = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=1,
+        max_length=64,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$",
+    ),
+]
 
 
 class KnowledgeApiModel(BaseModel):
@@ -162,6 +173,21 @@ def create_knowledge_router(
         service: KnowledgeService = service_dep,
     ) -> KnowledgeDocument:
         return service.get(note_id)
+
+    @router.get("/notes/{note_id}/presentations/marp")
+    def render_marp(
+        note_id: str,
+        mode: KnowledgePresentationMode = KnowledgePresentationMode.TECHNICAL_REPORT,
+        theme: MarpTheme = "default",
+        paginate: bool = True,
+        service: KnowledgeService = service_dep,
+    ) -> MarpPresentation:
+        return service.render_presentation(
+            note_id,
+            mode=mode,
+            theme=theme,
+            paginate=paginate,
+        )
 
     @router.patch("/notes/{note_id}")
     def update_note(

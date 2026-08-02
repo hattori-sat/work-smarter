@@ -30,6 +30,7 @@ ws init
 | `how_to` | 再現可能な手順 | Goal, Prerequisites, Procedure, Verification |
 | `reference` | 外部資料や調査結果 | Summary, Extracts, Sources |
 | `meeting_note` | 会議記録 | Attendees, Agenda, Notes, Decisions, Actions |
+| `technical_report` | 技術報告と発表 | Executive Summary, Outcome, Evidence, Risks and Unknowns, Next Actions, Sources |
 
 typeを省略すると`note`です。本文を省略すると`templates/knowledge/<type>.md`が使われます。
 
@@ -165,11 +166,38 @@ ws --json knowledge search "release" --field tag
 local APIを使う場合は`ws serve`を起動し、`/api/knowledge/*`を利用します。request/response schemaは
 `/openapi.json`で確認できます。
 
+## Create a Marp technical report
+
+発表用の技術報告は`technical_report` templateから作成します。本文の`##`見出しが1枚のslideになります。
+
+```bash
+ws knowledge add "Database adapter移行報告" --type technical_report
+ws knowledge presentation render KN-12AB --output adapter-rollout.marp.md
+```
+
+既存のKnowledge noteも同じcommandで投影できます。`--theme`、`--no-paginate`を指定でき、既存出力を置換する
+場合だけ`--force`が必要です。
+
+```bash
+ws knowledge presentation render ship-plan \
+  --theme gaia \
+  --no-paginate \
+  --output release-report.marp.md
+```
+
+生成された`.marp.md`にはsource IDとrevisionが入り、元のKnowledge fileや監査eventは変更されません。
+Work SmarterはMarp compilerを同梱しないため、previewやPDF/PPTX/HTML化にはMarp対応editorまたはCLIを別途
+使用します。APIからは次のread-only routeで同じprojectionを取得できます。
+
+```text
+GET /api/knowledge/notes/{id}/presentations/marp?theme=default&paginate=true
+```
+
 ## Current limits
 
 - 検索index、ranking、stemming、fuzzy searchはなく、現在のnoteを逐次検索する。
 - 添付ファイルのcopy、version管理、content extractionは行わない。
 - promotion後の双方向同期は行わない。
 - Confluence push/pullとprovider mappingはKnowledgeではなく、後続のpublishing featureで扱う。
+- MarpからPDF/PPTX/HTMLへのcompileとcustom theme asset管理は行わない。
 - graph visualization、automatic link suggestion、semantic/embedding searchは未実装。
-

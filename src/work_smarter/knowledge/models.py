@@ -38,6 +38,13 @@ class KnowledgeNoteType(StrEnum):
     HOW_TO = "how_to"
     REFERENCE = "reference"
     MEETING_NOTE = "meeting_note"
+    TECHNICAL_REPORT = "technical_report"
+
+
+class KnowledgePresentationMode(StrEnum):
+    """Supported narrative-to-presentation projections."""
+
+    TECHNICAL_REPORT = "technical_report"
 
 
 class KnowledgeLinkType(StrEnum):
@@ -181,6 +188,24 @@ class KnowledgeDocument(StrictModel):
     path: str
 
 
+class MarpPresentation(StrictModel):
+    """A reproducible Marp Markdown projection of one knowledge revision."""
+
+    source_id: str
+    source_revision: int = Field(ge=1)
+    mode: KnowledgePresentationMode = KnowledgePresentationMode.TECHNICAL_REPORT
+    theme: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+    paginate: bool = True
+    media_type: Literal["text/markdown"] = "text/markdown"
+    file_extension: Literal[".marp.md"] = ".marp.md"
+    markdown: str
+
+    @field_validator("source_id")
+    @classmethod
+    def validate_source_id(cls, value: str) -> str:
+        return _stable_id(value, field_name="presentation source ID")
+
+
 class KnowledgeSearchHit(StrictModel):
     note: KnowledgeNote
     body: str
@@ -222,8 +247,10 @@ __all__ = [
     "KnowledgeLinkType",
     "KnowledgeNote",
     "KnowledgeNoteType",
+    "KnowledgePresentationMode",
     "KnowledgeSearchField",
     "KnowledgeSearchHit",
+    "MarpPresentation",
     "SourceReference",
     "SourceReferenceKind",
     "utc_now",

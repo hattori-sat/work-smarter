@@ -169,3 +169,83 @@ def test_knowledge_cli_promotes_any_workspace_record_without_copying_files(
     assert document["note"]["note_type"] == "reference"
     assert document["note"]["sources"][0]["kind"] == "entity"
     assert document["note"]["sources"][0]["locator"] == task_id
+
+
+def test_knowledge_cli_renders_marp_to_stdout_and_safe_output_file(tmp_path: Path) -> None:
+    _initialize(tmp_path)
+    common = _common(tmp_path)
+    created = runner.invoke(
+        app,
+        [
+            *common,
+            "add",
+            "API reliability report",
+            "--type",
+            "technical_report",
+            "--body",
+            "## Outcome\n\nError rates fell.\n",
+        ],
+    )
+    note_id = json.loads(created.stdout)["note"]["id"]
+
+    rendered = runner.invoke(
+        app,
+        [*common, "presentation", "render", note_id[:12], "--theme", "uncover"],
+    )
+    assert rendered.exit_code == 0, rendered.output
+    payload = json.loads(rendered.stdout)
+    assert payload["source_id"] == note_id
+    assert payload["mode"] == "technical_report"
+    assert payload["theme"] == "uncover"
+    assert payload["markdown"].startswith("---\nmarp: true\n")
+
+    output = tmp_path / "exports" / "reliability.marp.md"
+    exported = runner.invoke(
+        app,
+        [
+            "--workspace",
+            str(tmp_path),
+            "knowledge",
+            "presentation",
+            "render",
+            note_id[:12],
+            "--output",
+            str(output),
+        ],
+    )
+    assert exported.exit_code == 0, exported.output
+    assert exported.stdout.strip() == str(output)
+    assert output.read_text(encoding="utf-8").startswith("---\nmarp: true\n")
+
+    refused = runner.invoke(
+        app,
+        [
+            "--workspace",
+            str(tmp_path),
+            "knowledge",
+            "presentation",
+            "render",
+            note_id,
+            "--output",
+            str(output),
+        ],
+    )
+    assert refused.exit_code == 2
+    assert "pass --force to overwrite" in refused.output
+
+    unsafe_theme = runner.invoke(
+        app,
+        [
+            "--workspace",
+            str(tmp_path),
+            "knowledge",
+            "presentation",
+            "render",
+            note_id,
+            "--theme",
+            "default\npaginate: false",
+        ],
+    )
+    assert unsafe_theme.exit_code == 2
+    assert "Invalid value for --theme" in unsafe_theme.output
+    assert "Traceback" not in unsafe_theme.output

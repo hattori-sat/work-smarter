@@ -24,6 +24,7 @@ other feature ── generic EntityRecord / stable ID ──► promote or link
 - `knowledge/service.py`: lock内のcreate/update/promote invariant、query、doctor
 - `knowledge/persistence.py`: `knowledge_note` codecと`knowledge/notes/` ownership
 - `knowledge/templates.py`: type別のuser-overridable body template
+- `knowledge/presentations.py`: Knowledge revisionからのread-only Marp projection
 - `knowledge/events.py`: Knowledgeが所有するstable event names
 - `knowledge/errors.py`: adapterが公開できるdomain error
 - `knowledge/cli.py`: root CLI stateを利用するkeyboard/script adapter
@@ -99,6 +100,25 @@ specを先に更新する。backlinkを別entityへ永続化してoutbound link�
 Doctorはservice writeでは通常作れないbroken/duplicate graphも、direct-edited Markdownから報告できなければ
 ならない。warningとerrorの区別、および`valid`の意味を保つ。
 
+## Presentation projections
+
+Marp technical reportはKnowledgeの別entityではなく、現在revisionから生成するread-only projectionである。
+`technical_report` note typeは発表向けsectionを持つdefault templateだが、rendererは既存noteにも利用できる。
+
+```text
+Knowledge Markdown (authority)
+        │
+        └── KnowledgeService.render_presentation()
+                         │
+                         ├── CLI stdout / .marp.md
+                         └── typed FastAPI response
+```
+
+rendererはsource file、revision、event storeを変更してはならない。Marp YAMLへ入るthemeはpublic modelで
+検証してから補間し、source titleはYAML frontmatterへ入れない。level-two headingだけをslide boundaryへ変換し、
+それ以外の本文は保持する。PDF/PPTX/HTML compilerはoptional consumerであり、Knowledge packageからNode.jsや
+Marp CLIを起動しない。詳細は[ADR 0005](../architecture/0005-marp-technical-reports-as-projections.md)を参照する。
+
 ## Promotion rules
 
 Promotionはfeature-specific importerではない。source recordのpublic shapeだけを読み、元bodyをcopyしてentity
@@ -131,6 +151,7 @@ publishing/import contractとして、remote identity、version、conflict polic
 - generic promotion、source provenance、repeat idempotency、multiple-claim conflict
 - doctor orphan/source-connected/broken/duplicate graph
 - CLI JSON purityとHTTP/OpenAPI typing/error mapping
+- Marp slide boundary、source revision、read-only behavior、unsafe theme、output overwrite refusal
 - package import boundaryとfeature composition
 
 ```bash
@@ -143,6 +164,6 @@ publishing/import contractとして、remote identity、version、conflict polic
 
 ## Current non-goals
 
-Confluence conversion/sync、binary attachment、semantic index、multi-user collaborationはこのpackageへ実装しない。
+Confluence conversion/sync、Marp binary compile、binary attachment、semantic index、multi-user collaborationは
+このpackageへ実装しない。
 それらはpublic Knowledge contractを利用する別feature/projectionとする。
-

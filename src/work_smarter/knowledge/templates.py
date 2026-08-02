@@ -46,6 +46,18 @@ DEFAULT_TEMPLATES: dict[KnowledgeNoteType, str] = {
 
 ## Actions
 """,
+    KnowledgeNoteType.TECHNICAL_REPORT: """## Executive Summary
+
+## Outcome
+
+## Evidence
+
+## Risks and Unknowns
+
+## Next Actions
+
+## Sources
+""",
 }
 
 

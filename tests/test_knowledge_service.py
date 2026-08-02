@@ -17,6 +17,7 @@ from work_smarter.knowledge.models import (
     KnowledgeLinkType,
     KnowledgeNote,
     KnowledgeNoteType,
+    KnowledgePresentationMode,
     KnowledgeSearchField,
     SourceReference,
     SourceReferenceKind,
@@ -104,6 +105,7 @@ def test_schema_covers_all_note_types_and_rejects_unknown_metadata() -> None:
         "how_to",
         "reference",
         "meeting_note",
+        "technical_report",
     }
 
     with pytest.raises(ValidationError):
@@ -114,6 +116,61 @@ def test_schema_covers_all_note_types_and_rejects_unknown_metadata() -> None:
                 "unexpected": True,
             }
         )
+
+
+def test_technical_report_template_renders_as_read_only_marp_projection(
+    knowledge: KnowledgeService,
+    knowledge_workspace: Workspace,
+) -> None:
+    created = knowledge.create(
+        title="Database adapter rollout",
+        note_type=KnowledgeNoteType.TECHNICAL_REPORT,
+        body=(
+            "## Executive Summary\n\nAdapters remove database lock-in.\n\n"
+            "## Evidence\n\n- SQLite acceptance is green.\n\n"
+            "```python\n## This is code, not a slide\n```\n"
+        ),
+    )
+    source_path = knowledge_workspace.root / created.path
+    source_before = source_path.read_bytes()
+    events_before = knowledge_workspace.event_store.read_all()
+
+    presentation = knowledge.render_presentation(
+        created.note.id[:12],
+        mode=KnowledgePresentationMode.TECHNICAL_REPORT,
+        theme="gaia",
+        paginate=False,
+    )
+
+    assert presentation.source_id == created.note.id
+    assert presentation.source_revision == 1
+    assert presentation.mode is KnowledgePresentationMode.TECHNICAL_REPORT
+    assert presentation.theme == "gaia"
+    assert presentation.paginate is False
+    assert presentation.media_type == "text/markdown"
+    assert presentation.file_extension == ".marp.md"
+    assert presentation.markdown.startswith("---\nmarp: true\ntheme: gaia\npaginate: false\n---\n")
+    assert "# Database adapter rollout" in presentation.markdown
+    assert "<!-- Source: " + created.note.id + "@1 -->" in presentation.markdown
+    assert "\n---\n\n## Executive Summary" in presentation.markdown
+    assert "\n---\n\n## Evidence" in presentation.markdown
+    assert "\n---\n\n## This is code" not in presentation.markdown
+    assert "```python\n## This is code, not a slide\n```" in presentation.markdown
+    assert source_path.read_bytes() == source_before
+    assert knowledge_workspace.event_store.read_all() == events_before
+
+
+def test_marp_projection_rejects_unsafe_theme_without_side_effects(
+    knowledge: KnowledgeService,
+    knowledge_workspace: Workspace,
+) -> None:
+    created = knowledge.create(title="Safe projection")
+    events_before = knowledge_workspace.event_store.read_all()
+
+    with pytest.raises(ValidationError, match="theme"):
+        knowledge.render_presentation(created.note.id, theme="default\npaginate: false")
+
+    assert knowledge_workspace.event_store.read_all() == events_before
 
 
 def test_create_normalizes_metadata_preserves_markdown_and_reloads(

@@ -207,6 +207,20 @@ Follow-up slices:
 - [x] SQLite driver importのadapter内隔離
 - [x] user/developer documentation
 
+### M10 Marp technical reports — `feat/marp-technical-reports`
+
+- Current branch: `feat/marp-technical-reports`
+- Status: COMPLETE
+
+- [x] `technical_report` Knowledge template
+- [x] Knowledge revisionからのread-only Marp projection
+- [x] source ID/revision付きのtyped presentation contract
+- [x] canonical `ws knowledge presentation render` CLIとsafe overwrite
+- [x] typed FastAPI/OpenAPI endpoint
+- [x] YAML injectionを防ぐtheme validation
+- [x] source Markdownと監査eventを変更しないacceptance test
+- [x] ADR 0005、user/developer/spec/reference documentation
+
 ## Definition of Done for every slice
 
 1. 失敗するacceptance/unit testを先に置く。
