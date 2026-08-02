@@ -1,0 +1,2 @@
+# Complete local test/lint environment from the pyproject `dev` extra.
+.[dev]
