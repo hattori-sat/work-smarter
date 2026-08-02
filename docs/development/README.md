@@ -2,7 +2,12 @@
 
 ## Architecture
 
-Work SmarterはPython modular monolithです。
+Work SmarterはFastAPI local application serverを持つPython modular monolithです。
+
+Target Architectureへの移行方針は
+[ADR 0003](../architecture/0003-hybrid-source-of-truth-and-local-application-server.md)を参照してください。
+SQLiteとMarkdownは情報種別ごとに正本を分担します。既存domainは移行完了までMarkdown/JSONLを正本とし、
+SQLiteへ曖昧な二重書込みを行いません。
 
 - `work_smarter.storage`: feature-neutral Markdown、JSONL、atomic write、lock
 - `work_smarter.composition`: enabled featureのcodec/hook合成
@@ -11,6 +16,7 @@ Work SmarterはPython modular monolithです。
 - `work_smarter.project_management`: managed project boundary
 - `work_smarter.api`: GTDとKnowledge routerをmountするtyped HTTP host
 - `work_smarter.cli`: feature subcommandをmountするkeyboard/script host
+- `work_smarter.shared.persistence`: SQLite接続、transaction、forward-only migration
 
 新featureはgeneric storageへmodelを追加せず、`EntitySpec`をcomposition rootへ登録します。
 

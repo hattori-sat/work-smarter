@@ -1,12 +1,12 @@
 # ADR 0001: Text-first modular monolith
 
-- Status: Accepted
+- Status: Superseded by ADR 0003
 - Date: 2026-07-23
 
 ## Context
 
 Work Smarter needs a fast GTD workflow now and separately evolving project
-management, User Story Mapping, TBP, and publishing features later. The primary
+management, User Story Mapping, and publishing features later. The primary
 interface is VS Code, but the domain must remain usable from a CLI, an HTTP API,
 and automation.
 
@@ -42,6 +42,9 @@ Use a modular Python application with these boundaries:
 
 Markdown and YAML frontmatter are authoritative. JSON Lines events are
 authoritative history. Any SQLite index is a disposable projection.
+
+This source-of-truth decision was superseded on 2026-08-02. See
+[ADR 0003](0003-hybrid-source-of-truth-and-local-application-server.md).
 
 ## Consequences
 

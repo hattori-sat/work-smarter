@@ -2,12 +2,50 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 from typer.testing import CliRunner
 
 from work_smarter.cli import app
 
 runner = CliRunner()
+
+
+def test_server_start_uses_fastapi_on_the_loopback_interface(tmp_path: Path) -> None:
+    with patch("uvicorn.run") as run_server:
+        result = runner.invoke(
+            app,
+            [
+                "--workspace",
+                str(tmp_path),
+                "server",
+                "start",
+                "--port",
+                "9876",
+            ],
+        )
+
+    assert result.exit_code == 0, result.stdout
+    api = run_server.call_args.args[0]
+    assert api.state.workspace_path == tmp_path.resolve()
+    assert run_server.call_args.kwargs == {"host": "127.0.0.1", "port": 9876}
+
+
+def test_server_start_rejects_non_loopback_binding(tmp_path: Path) -> None:
+    result = runner.invoke(
+        app,
+        [
+            "--workspace",
+            str(tmp_path),
+            "server",
+            "start",
+            "--host",
+            "0.0.0.0",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "127.0.0.1" in result.output
 
 
 def test_cli_happy_path_uses_short_ids_and_json(tmp_path: Path) -> None:

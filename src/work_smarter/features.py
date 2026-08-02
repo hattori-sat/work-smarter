@@ -15,7 +15,7 @@ class Feature(Protocol):
 
     Features may expose CLI commands, API routers, validators, and event
     subscribers.  The core deliberately treats those objects as opaque so a
-    future User Story Mapping or TBP feature does not depend on GTD internals.
+    future feature does not depend on GTD internals.
     """
 
     name: str

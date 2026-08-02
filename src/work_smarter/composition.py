@@ -10,6 +10,7 @@ from work_smarter.features import Feature, FeatureRegistry, discover_features
 from work_smarter.gtd import GtdFeature
 from work_smarter.knowledge import KnowledgeFeature
 from work_smarter.project_management import ProjectManagementFeature
+from work_smarter.shared.persistence.database import ApplicationDatabase
 from work_smarter.storage.workspace import DEFAULT_WORKSPACE_FEATURES, Workspace
 
 BUILTIN_FEATURES: tuple[type[Feature], ...] = (
@@ -54,6 +55,7 @@ def initialize_workspace(root: Path | str) -> Workspace:
     )
     composition = compose_features(enabled)
     workspace = Workspace.initialize(root, composition.entity_registry())
+    ApplicationDatabase.for_workspace(workspace.root).migrate()
     for initializer in composition.workspace_initializers:
         initializer(workspace)
     return workspace

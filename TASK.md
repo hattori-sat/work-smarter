@@ -1,6 +1,6 @@
 # Work Smarter v1 — implementation tracker
 
-最終更新: 2026-07-23
+最終更新: 2026-08-02
 
 ## Outcome
 
@@ -25,7 +25,10 @@ project計画・Confluence公開まで一貫して扱えるlocal-first systemを
 - `main` はGitHub上のinitial commitを基点とする。
 - integration branchは `dev/work-smarter-v1`、実装sliceは `feat/*` とする。
 - GTD foundationとrigorous Task schema v3は実装済みで、82 testsが通過している。
-- source of truthはMarkdown frontmatterとappend-only audit eventである。
+- 現行domainのsource of truthはMarkdown frontmatterとappend-only JSONL eventである。
+- Target Architectureでは構造化情報をSQLite、narrative本文をMarkdownの正本とし、FastAPIを
+  local application serverにする。
+- `feat/release-quality`は`origin/dev/work-smarter-v1`へmerge済みである。
 
 ### Inferences
 
@@ -163,6 +166,28 @@ main
 - [ ] developer architecture/API/contribution manual完成
 - [ ] changelog and v1 release checklist
 - [ ] `dev/work-smarter-v1` → `main` merge
+
+### M8 Target architecture foundation — `feat/architecture-foundation`
+
+- Current branch: `feat/architecture-foundation`
+- Status: COMPLETE
+
+- [x] Target ArchitectureをADR 0003として記録
+- [x] SQLite database pathとforward-only migration基盤
+- [x] append-only activity event schemaとoutbox schema
+- [x] workspace初期化とFastAPI lifecycleへのmigration統合
+- [x] typed health responseでdatabase schema状態を公開
+- [x] canonical `ws server start` commandとloopback-only制約
+
+Follow-up slices:
+
+- [ ] SQLite snapshotを含む整合backup/restore
+- [ ] domain単位のDatabase source-of-truth移行
+- [ ] CLI domain/resource/operation treeとHTTP client化
+- [ ] operation journalとoutbox worker
+
+移行中の正本境界、比較案、未確認事項は
+`docs/architecture/0003-hybrid-source-of-truth-and-local-application-server.md`を参照する。
 
 ## Definition of Done for every slice
 

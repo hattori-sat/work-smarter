@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from contextlib import asynccontextmanager
 from datetime import date, datetime
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -59,10 +60,31 @@ from work_smarter.project_management.errors import (
     ProjectTransitionError,
 )
 from work_smarter.project_management.service import ProjectManagementService
+from work_smarter.shared.persistence.database import ApplicationDatabase
 
 
 class ApiModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+class DatabaseHealth(ApiModel):
+    initialized: bool
+    schema_version: int
+    latest_schema_version: int
+
+
+class HealthResponse(ApiModel):
+    status: Literal["ok"] = "ok"
+    version: str
+    workspace: str
+    initialized: bool
+    database: DatabaseHealth
+
+
+class WorkspaceInitializationResponse(ApiModel):
+    workspace: str
+    initialized: bool
+    database_schema_version: int
 
 
 class CaptureRequest(ApiModel):
@@ -600,10 +622,19 @@ def create_app(workspace_path: Path | str | None = None) -> FastAPI:
         .expanduser()
         .resolve()
     )
+    database = ApplicationDatabase.for_workspace(configured)
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        if (configured / ".work-smarter" / "config.yml").is_file():
+            database.migrate()
+        yield
+
     app = FastAPI(
         title="Work Smarter",
         version=__version__,
         description="Local-first GTD API. Project management is a separate feature.",
+        lifespan=lifespan,
     )
     app.state.workspace_path = configured
 
@@ -641,18 +672,28 @@ def create_app(workspace_path: Path | str | None = None) -> FastAPI:
         )
 
     @app.get("/health", tags=["system"])
-    def health() -> dict[str, Any]:
-        return {
-            "status": "ok",
-            "version": __version__,
-            "workspace": str(configured),
-            "initialized": (configured / ".work-smarter" / "config.yml").is_file(),
-        }
+    def health() -> HealthResponse:
+        database_status = database.status()
+        return HealthResponse(
+            version=__version__,
+            workspace=str(configured),
+            initialized=(configured / ".work-smarter" / "config.yml").is_file(),
+            database=DatabaseHealth(
+                initialized=database_status.initialized,
+                schema_version=database_status.schema_version,
+                latest_schema_version=database_status.latest_schema_version,
+            ),
+        )
 
     @app.post("/api/workspace/init", tags=["system"], status_code=201)
-    def initialize_workspace() -> dict[str, Any]:
+    def initialize_workspace() -> WorkspaceInitializationResponse:
         workspace = initialize_composed_workspace(configured)
-        return {"workspace": str(workspace.root), "initialized": True}
+        status = database.status()
+        return WorkspaceInitializationResponse(
+            workspace=str(workspace.root),
+            initialized=True,
+            database_schema_version=status.schema_version,
+        )
 
     app.include_router(create_gtd_router(get_service))
     app.include_router(create_knowledge_router(get_knowledge_service))
