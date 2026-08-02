@@ -144,6 +144,8 @@ ul ul {
 }
 
 ul > li {
+  font-size: 32px;
+  line-height: 1.3;
   padding-left: 30px;
   position: relative;
 }
@@ -161,8 +163,16 @@ ul ul > li::before {
   content: "●";
 }
 
+ul ul > li {
+  font-size: 28px;
+}
+
 ul ul ul > li::before {
   content: "▲";
+}
+
+ul ul ul > li {
+  font-size: 24px;
 }
 
 strong {
@@ -181,6 +191,38 @@ section svg {
 section p:has(> img),
 section p:has(> svg) {
   text-align: center;
+}
+
+section:has(ul):has(img):has(blockquote:last-child) ul {
+  margin-bottom: 10px;
+}
+
+section:has(ul):has(img):has(blockquote:last-child) img,
+section:has(ul):has(svg):has(blockquote:last-child) svg {
+  max-height: 260px;
+}
+
+section:has(ul):has(img):has(blockquote:last-child) p:has(> em:only-child),
+section:has(ul):has(svg):has(blockquote:last-child) p:has(> em:only-child) {
+  margin-bottom: 8px;
+}
+
+section:has(ul):has(img):has(blockquote:last-child) blockquote:last-child,
+section:has(ul):has(svg):has(blockquote:last-child) blockquote:last-child {
+  background: var(--ws-accent-soft);
+  border-left: 0;
+  border-top: 3px solid var(--ws-accent);
+  font-size: 24px;
+  font-weight: 600;
+  margin: 8px auto 0;
+  padding: 10px 18px;
+  text-align: center;
+  width: 92%;
+}
+
+section:has(ul):has(img):has(blockquote:last-child) blockquote:last-child p,
+section:has(ul):has(svg):has(blockquote:last-child) blockquote:last-child p {
+  margin: 0;
 }
 
 table {

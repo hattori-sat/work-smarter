@@ -127,11 +127,13 @@ visual templateは`MarpPresentationTemplate`のclosed enumで選び、workspace�
 
 `scientific` templateのMarkdown/CSS conventionは次のとおり。
 
-- nested unordered listはlevel 1/2/3を`■`/`●`/`▲`へ置換する。
+- nested unordered listはlevel 1/2/3を`■`/`●`/`▲`へ置換し、32/28/24pxへ段階化する。
 - inline childが`em:only-child`のparagraphを図表captionとして中央配置する。
 - tableは`max-content`幅と`max-width: 100%`を併用し、内容幅を保ちながら中央配置する。
 - `section:has(table ~ table)`で複数表を検出し、そのslideのtableだけfontとcell paddingをcompact化する。
 - 複数表は横幅を推測してgrid化せず、source順に縦配置する。
+- `section:has(ul):has(img):has(blockquote:last-child)`で「箇条書き→図→caption→LEAD」を検出し、図高を
+  260px、LEADを24pxへ固定する。SVGも同じcontractを持つ。
 
 HTML previewは`MarpCompiler` Portを介してcompileする。Application serviceはcompilerを引数で受け、CLI/APIの
 compositionが`MarpCliCompiler`を渡す。adapterは次のsecurity contractを守る。
@@ -181,6 +183,7 @@ publishing/import contractとして、remote identity、version、conflict polic
 - Marp slide boundary、source revision、read-only behavior、unsafe theme、output overwrite refusal
 - scientific visual template、user override non-overwrite、CSS block-scalar埋め込み、CLI/API template contract
 - 3-level list marker、図表caption中央揃え、2-table compact layout、overflowなしのvisual QA
+- 24/21/18pt相当のlist階層、list→figure→caption→LEAD順序、18pt相当LEADのvisual QA
 - fake Marp compiler、fixed argument、HTML media type、missing/failing compiler error
 - package import boundaryとfeature composition
 

@@ -215,7 +215,8 @@ templates/knowledge/presentations/scientific.css
 このCSSは生成する`.marp.md`へ埋め込まれるため、別途Marp themeを登録する必要はありません。`ws init`を
 再実行しても編集済みCSSは上書きされません。
 
-unordered listはMarkdownのnestをそのまま使い、level 1/2/3が`■`/`●`/`▲`になります。
+unordered listはMarkdownのnestをそのまま使います。level 1/2/3は`■`/`●`/`▲`、文字サイズは
+32/28/24pxです。96dpiのCSS換算では約24/21/18ptに相当します。
 
 ```markdown
 - 第一階層
@@ -239,6 +240,25 @@ unordered listはMarkdownのnestをそのまま使い、level 1/2/3が`■`/`●
 
 同じslideに表が2つ以上ある場合も、各tableとcaptionをこの順で繰り返します。表は縦に独立して中央配置され、
 複数表があるslideだけfontとcell paddingがcompactになります。
+
+箇条書きの下に図、その下に最後のLEAD文を置く場合は、同じ`##` section内へ次の順番で書きます。
+
+```markdown
+## Message Flow
+
+- **Conclusion:** 最初に伝える結論
+  - **Evidence:** 結論を支える根拠
+    - **Boundary:** 制約または未確認事項
+
+![構成図](architecture.svg)
+
+*図 2. 結論と根拠を示す構成図。*
+
+> **LEAD:** 最後に聞き手へ残したい一文を書きます。
+```
+
+この4要素が揃うと、templateは図を高さ260px以内へ調整し、最後のLEADを24px（約18pt）の中央揃え
+takeawayとして表示します。Knowledge本文にはMarp固有classを書く必要がありません。
 
 `--json`と`--format html`を組み合わせるとsource metadataとHTMLをJSONで返します。Marp CLIがない場合は
 installまたは`WORK_SMARTER_MARP_CLI`設定を案内するerrorになります。command argumentを環境変数へ含めることは

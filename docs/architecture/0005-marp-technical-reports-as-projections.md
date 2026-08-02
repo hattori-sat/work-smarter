@@ -78,6 +78,9 @@ presentation固有設定を出力へ閉じ込められる。slideごとの大幅
 18. unordered listはlevel 1/2/3を`■`/`●`/`▲`で表示する。italicだけのparagraphを図表captionの
     Markdown contractとし、図、表、captionを個別に中央配置する。同一slideに複数の表がある場合は縦に並べ、
     表のfontとcell paddingをcompact化する。
+19. unordered listのlevel 1/2/3は32/28/24px（96dpi換算で約24/21/18pt）とする。箇条書き、図、caption、
+    最後の`> **LEAD:** ...` blockquoteが同じslideにある場合は、図を260px以内へ抑え、LEADを24pxの
+    centered takeawayとして表示する。
 
 ## Verification plan
 
@@ -90,6 +93,7 @@ presentation固有設定を出力へ閉じ込められる。slideごとの大幅
 - visual templateの初期化、user overrideのnon-overwrite、Marp frontmatterへの埋め込みを確認すること。
 - HTMLを実renderし、titleが上端、H1/H2/H3が44/36/28px、図表のcenter deltaが0pxであることを確認すること。
 - 3-level listのmarker、図caption、2つの表と各caption、slide overflowをbrowser computed styleで確認すること。
+- 箇条書き、図、caption、LEADの順序、32/28/24pxの階層、24px LEAD、overflow 0pxを確認すること。
 - 全Knowledge testsと全repository testsを実行すること。
 
 ## Consequences
