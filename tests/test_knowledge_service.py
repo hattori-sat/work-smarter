@@ -93,6 +93,13 @@ def test_feature_registers_independent_persistence_and_templates(tmp_path: Path)
     assert "h1" in theme_content
     assert "h2" in theme_content
     assert "h3" in theme_content
+    assert 'content: "■"' in theme_content
+    assert 'content: "●"' in theme_content
+    assert 'content: "▲"' in theme_content
+    assert "p:has(> em:only-child)" in theme_content
+    assert "margin: 10px auto 4px" in theme_content
+    assert "width: max-content" in theme_content
+    assert "section:has(table ~ table) table" in theme_content
 
     scientific_theme.write_text("section { color: rebeccapurple; }\n", encoding="utf-8")
     for initializer in registry.workspace_initializers:

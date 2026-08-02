@@ -221,6 +221,8 @@ Follow-up slices:
 - [x] browser-ready HTML compileとpreview endpoint
 - [x] 科学技術報告向け`scientific` visual template
 - [x] title上端、H1/H2/H3階層、図表中央配置のHTML visual QA
+- [x] 3-level listの`■`/`●`/`▲` marker
+- [x] 図番号・表番号の中央配置と2-table compact layout
 - [x] workspaceで編集可能かつ再initで上書きしないpresentation CSS
 - [x] CLI/APIのtyped template selection
 - [x] source Markdownと監査eventを変更しないacceptance test

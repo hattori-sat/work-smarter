@@ -133,6 +133,38 @@ li {
   padding-left: 4px;
 }
 
+ul {
+  list-style: none;
+  padding-left: 0;
+}
+
+ul ul {
+  margin-top: 8px;
+  padding-left: 34px;
+}
+
+ul > li {
+  padding-left: 30px;
+  position: relative;
+}
+
+ul > li::before {
+  color: var(--ws-accent);
+  content: "■";
+  font-size: 0.68em;
+  left: 2px;
+  position: absolute;
+  top: 0.3em;
+}
+
+ul ul > li::before {
+  content: "●";
+}
+
+ul ul ul > li::before {
+  content: "▲";
+}
+
 strong {
   color: var(--ws-accent);
 }
@@ -140,7 +172,7 @@ strong {
 section img,
 section svg {
   display: block;
-  margin: 18px auto;
+  margin: 10px auto 4px;
   max-height: 430px;
   max-width: 92%;
   object-fit: contain;
@@ -154,8 +186,9 @@ section p:has(> svg) {
 table {
   border-collapse: collapse;
   font-size: 20px;
-  margin: 18px auto;
-  width: auto;
+  margin: 10px auto 4px;
+  max-width: 100%;
+  width: max-content;
 }
 
 th,
@@ -168,6 +201,16 @@ td {
 th {
   background: var(--ws-accent-soft);
   color: var(--ws-ink);
+}
+
+section:has(table ~ table) table {
+  font-size: 18px;
+  margin: 8px auto 3px;
+}
+
+section:has(table ~ table) th,
+section:has(table ~ table) td {
+  padding: 6px 10px;
 }
 
 blockquote {
@@ -192,10 +235,14 @@ code {
 }
 
 small,
-figcaption {
+figcaption,
+section p:has(> em:only-child) {
   color: var(--ws-muted);
+  display: block;
   font-size: 16px;
+  margin: 0 auto 16px;
   text-align: center;
+  width: 100%;
 }
 
 a {

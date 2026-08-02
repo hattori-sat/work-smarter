@@ -125,6 +125,14 @@ visual templateは`MarpPresentationTemplate`のclosed enumで選び、workspace�
 上書きしない。既定`scientific` CSSのdesign根拠は
 [research note](../research/scientific-presentation-template.md)に記録する。
 
+`scientific` templateのMarkdown/CSS conventionは次のとおり。
+
+- nested unordered listはlevel 1/2/3を`■`/`●`/`▲`へ置換する。
+- inline childが`em:only-child`のparagraphを図表captionとして中央配置する。
+- tableは`max-content`幅と`max-width: 100%`を併用し、内容幅を保ちながら中央配置する。
+- `section:has(table ~ table)`で複数表を検出し、そのslideのtableだけfontとcell paddingをcompact化する。
+- 複数表は横幅を推測してgrid化せず、source順に縦配置する。
+
 HTML previewは`MarpCompiler` Portを介してcompileする。Application serviceはcompilerを引数で受け、CLI/APIの
 compositionが`MarpCliCompiler`を渡す。adapterは次のsecurity contractを守る。
 
@@ -172,6 +180,7 @@ publishing/import contractとして、remote identity、version、conflict polic
 - CLI JSON purityとHTTP/OpenAPI typing/error mapping
 - Marp slide boundary、source revision、read-only behavior、unsafe theme、output overwrite refusal
 - scientific visual template、user override non-overwrite、CSS block-scalar埋め込み、CLI/API template contract
+- 3-level list marker、図表caption中央揃え、2-table compact layout、overflowなしのvisual QA
 - fake Marp compiler、fixed argument、HTML media type、missing/failing compiler error
 - package import boundaryとfeature composition
 

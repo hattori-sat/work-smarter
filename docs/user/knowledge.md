@@ -213,8 +213,32 @@ templates/knowledge/presentations/scientific.css
 ```
 
 このCSSは生成する`.marp.md`へ埋め込まれるため、別途Marp themeを登録する必要はありません。`ws init`を
-再実行しても編集済みCSSは上書きされません。図は通常のMarkdown imageで置き、captionは`<small>`または
-`<figcaption>`を使うと中央配置のcaption styleが適用されます。
+再実行しても編集済みCSSは上書きされません。
+
+unordered listはMarkdownのnestをそのまま使い、level 1/2/3が`■`/`●`/`▲`になります。
+
+```markdown
+- 第一階層
+  - 第二階層
+    - 第三階層
+```
+
+図表番号はitalic paragraphとして対象の直後へ書きます。図、表、captionはそれぞれ中央配置されます。
+
+```markdown
+![検証時間](verification.svg)
+
+*図 1. 検証時間の推移。*
+
+| Adapter | Result |
+|---|---|
+| SQLite | Passed |
+
+*表 1. Adapter検証結果。*
+```
+
+同じslideに表が2つ以上ある場合も、各tableとcaptionをこの順で繰り返します。表は縦に独立して中央配置され、
+複数表があるslideだけfontとcell paddingがcompactになります。
 
 `--json`と`--format html`を組み合わせるとsource metadataとHTMLをJSONで返します。Marp CLIがない場合は
 installまたは`WORK_SMARTER_MARP_CLI`設定を案内するerrorになります。command argumentを環境変数へ含めることは

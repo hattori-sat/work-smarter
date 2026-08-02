@@ -39,6 +39,8 @@ userが編集でき、生成物がself-containedになる。CSSが各生成物�
 - H1/H2/H3は44/36/28px、本文24px、表20pxとし、3段の明確なhierarchyを作る。
 - white/near-white背景、濃色文字、blue accent 1色を基本にする。
 - image、SVG、tableを水平方向の中央へ置き、figure captionも中央揃えにする。
+- unordered listの3階層を`■`/`●`/`▲`で明示し、indentとshapeの両方でhierarchyを示す。
+- 複数表はwide tableにも対応しやすい縦配置とし、2枚以上の場合だけ文字と余白をcompact化する。
 - bodyを自動縮小せず、overflow時はcontent編集で1 slide 1 messageへ戻す。
 
 ## Verification
@@ -46,11 +48,14 @@ userが編集でき、生成物がself-containedになる。CSSが各生成物�
 - Marp CLIで10 slidesのHTML sampleを生成した。
 - browser computed styleでH1/H2/H3が44/36/28px、図と表のcenter deltaが0pxであることを確認した。
 - titleがvertical centerになった初回sampleを発見し、`align-content: start`で上端配置へ修正した。
+- 3-level listのmarkerを`■`/`●`/`▲`、indentを31/61/90pxとしてbrowserで確認した。
+- 図、図番号、2つの表、2つの表番号のcenter deltaがすべて0px、slide overflowが0pxであることを確認した。
 
 ## Unknowns
 
 - projector、会議室display、印刷PDFでの色再現性はUNKNOWN。
 - dense tableや縦長figureの自動分割が必要かはUNKNOWN。
+- 3枚以上の表、wide table、長いcaptionを自動的に別slideへ分ける必要性はUNKNOWN。
 - organization固有brand、logo、confidentiality footerの要件はUNKNOWN。
 
 ## Sources

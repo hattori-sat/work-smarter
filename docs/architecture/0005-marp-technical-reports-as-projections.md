@@ -75,6 +75,9 @@ presentation固有設定を出力へ閉じ込められる。slideごとの大幅
 16. `scientific` templateはtitleを上端に置き、H1/H2/H3を44/36/28pxで段階化し、図と表を中央配置する。
     本文は24px、表は20pxとし、白地、濃い文字、青1色のaccent、余白を基本にする。
 17. CLIの`--template`とHTTPの`template` queryはclosed enumとし、現時点の値は`scientific`だけとする。
+18. unordered listはlevel 1/2/3を`■`/`●`/`▲`で表示する。italicだけのparagraphを図表captionの
+    Markdown contractとし、図、表、captionを個別に中央配置する。同一slideに複数の表がある場合は縦に並べ、
+    表のfontとcell paddingをcompact化する。
 
 ## Verification plan
 
@@ -86,6 +89,7 @@ presentation固有設定を出力へ閉じ込められる。slideごとの大幅
 - HTML previewが`text/html`で返り、sourceとeventを変更しないこと。
 - visual templateの初期化、user overrideのnon-overwrite、Marp frontmatterへの埋め込みを確認すること。
 - HTMLを実renderし、titleが上端、H1/H2/H3が44/36/28px、図表のcenter deltaが0pxであることを確認すること。
+- 3-level listのmarker、図caption、2つの表と各caption、slide overflowをbrowser computed styleで確認すること。
 - 全Knowledge testsと全repository testsを実行すること。
 
 ## Consequences
@@ -102,5 +106,6 @@ presentation固有設定を出力へ閉じ込められる。slideごとの大幅
 
 - 複数のvisual templateを追加したときの互換性・versioning policyはUNKNOWN。
 - diagram、image、code blockが1 slideを超える場合の自動分割policyはUNKNOWN。
+- 3枚以上の表、wide table、長いcaptionの自動分割policyはUNKNOWN。
 - speaker notes、multiple audience variant、PDF/PPTX build pipelineをcoreへ持つ必要性はUNKNOWN。
 - Marp出力をConfluenceへpublishするか、Knowledge本文をpublishするかのUI選択方式はUNKNOWN。
