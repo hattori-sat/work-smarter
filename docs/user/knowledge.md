@@ -218,6 +218,9 @@ templates/knowledge/presentations/scientific.css
 unordered listはMarkdownのnestをそのまま使います。level 1/2/3は`■`/`●`/`▲`、文字サイズは
 32/28/24pxです。96dpiのCSS換算では約24/21/18ptに相当します。
 
+見出しはH1/H2/H3が52/44/36px（約39/33/27pt）、通常本文は28px（約21pt）、図表captionは20px
+（約15pt）です。強調したい語句だけを`**...**`で囲みます。強調は青文字ではなく、本文色の太字になります。
+
 ```markdown
 - 第一階層
   - 第二階層
@@ -246,9 +249,9 @@ unordered listはMarkdownのnestをそのまま使います。level 1/2/3は`■
 ```markdown
 ## Message Flow
 
-- **Conclusion:** 最初に伝える結論
-  - **Evidence:** 結論を支える根拠
-    - **Boundary:** 制約または未確認事項
+- 最初に伝える**結論**
+  - 結論を支える**根拠**
+    - 制約または**未確認事項**
 
 ![構成図](architecture.svg)
 
@@ -257,8 +260,9 @@ unordered listはMarkdownのnestをそのまま使います。level 1/2/3は`■
 > **LEAD:** 最後に聞き手へ残したい一文を書きます。
 ```
 
-この4要素が揃うと、templateは図を高さ260px以内へ調整し、最後のLEADを24px（約18pt）の中央揃え
-takeawayとして表示します。Knowledge本文にはMarp固有classを書く必要がありません。
+この4要素が揃うと、templateは図を高さ250px以内へ調整し、最後のLEADを28px（約21pt）の中央揃え、
+角丸14pxのtakeaway boxとして表示します。`Conclusion:`などのlabelは自動追加されません。Knowledge本文には
+Marp固有classを書く必要がありません。
 
 `--json`と`--format html`を組み合わせるとsource metadataとHTMLをJSONで返します。Marp CLIがない場合は
 installまたは`WORK_SMARTER_MARP_CLI`設定を案内するerrorになります。command argumentを環境変数へ含めることは

@@ -82,7 +82,7 @@ DEFAULT_PRESENTATION_TEMPLATES: dict[MarpPresentationTemplate, str] = {
   background: var(--ws-surface);
   color: var(--ws-ink);
   font-family: Inter, "Noto Sans JP", "Hiragino Sans", "Yu Gothic", Arial, sans-serif;
-  font-size: 24px;
+  font-size: 28px;
   justify-content: flex-start;
   line-height: 1.38;
   padding: 52px 68px 46px;
@@ -105,19 +105,19 @@ h3 {
 
 h1 {
   border-bottom: 4px solid var(--ws-accent);
-  font-size: 44px;
+  font-size: 52px;
   padding-bottom: 14px;
 }
 
 h2 {
   border-bottom: 2px solid var(--ws-rule);
-  font-size: 36px;
+  font-size: 44px;
   padding-bottom: 12px;
 }
 
 h3 {
   color: var(--ws-accent);
-  font-size: 28px;
+  font-size: 36px;
   margin-bottom: 16px;
 }
 
@@ -176,7 +176,8 @@ ul ul ul > li {
 }
 
 strong {
-  color: var(--ws-accent);
+  color: var(--ws-ink);
+  font-weight: 800;
 }
 
 section img,
@@ -199,7 +200,7 @@ section:has(ul):has(img):has(blockquote:last-child) ul {
 
 section:has(ul):has(img):has(blockquote:last-child) img,
 section:has(ul):has(svg):has(blockquote:last-child) svg {
-  max-height: 260px;
+  max-height: 250px;
 }
 
 section:has(ul):has(img):has(blockquote:last-child) p:has(> em:only-child),
@@ -209,10 +210,12 @@ section:has(ul):has(svg):has(blockquote:last-child) p:has(> em:only-child) {
 
 section:has(ul):has(img):has(blockquote:last-child) blockquote:last-child,
 section:has(ul):has(svg):has(blockquote:last-child) blockquote:last-child {
-  background: var(--ws-accent-soft);
-  border-left: 0;
-  border-top: 3px solid var(--ws-accent);
-  font-size: 24px;
+  background: #ffffff;
+  border: 0;
+  border-radius: 14px;
+  box-sizing: border-box;
+  box-shadow: inset 0 0 0 2px var(--ws-accent);
+  font-size: 28px;
   font-weight: 600;
   margin: 8px auto 0;
   padding: 10px 18px;
@@ -227,7 +230,7 @@ section:has(ul):has(svg):has(blockquote:last-child) blockquote:last-child p {
 
 table {
   border-collapse: collapse;
-  font-size: 20px;
+  font-size: 22px;
   margin: 10px auto 4px;
   max-width: 100%;
   width: max-content;
@@ -246,7 +249,7 @@ th {
 }
 
 section:has(table ~ table) table {
-  font-size: 18px;
+  font-size: 20px;
   margin: 8px auto 3px;
 }
 
@@ -267,7 +270,7 @@ pre {
   background: #eef2f6;
   border: 1px solid var(--ws-rule);
   border-radius: 6px;
-  font-size: 19px;
+  font-size: 22px;
   line-height: 1.35;
   padding: 16px 20px;
 }
@@ -281,7 +284,7 @@ figcaption,
 section p:has(> em:only-child) {
   color: var(--ws-muted);
   display: block;
-  font-size: 16px;
+  font-size: 20px;
   margin: 0 auto 16px;
   text-align: center;
   width: 100%;

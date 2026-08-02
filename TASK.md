@@ -223,8 +223,10 @@ Follow-up slices:
 - [x] title上端、H1/H2/H3階層、図表中央配置のHTML visual QA
 - [x] 3-level listの`■`/`●`/`▲` marker
 - [x] list hierarchyの24/21/18pt相当font size
+- [x] technical heading/body/caption/tableのprojector-readable type scale
 - [x] 図番号・表番号の中央配置と2-table compact layout
 - [x] list→figure→caption→LEAD compositionとoverflow visual QA
+- [x] explicit Markdown strongとrounded LEAD takeaway
 - [x] workspaceで編集可能かつ再initで上書きしないpresentation CSS
 - [x] CLI/APIのtyped template selection
 - [x] source Markdownと監査eventを変更しないacceptance test

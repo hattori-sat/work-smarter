@@ -72,15 +72,18 @@ presentation固有設定を出力へ閉じ込められる。slideごとの大幅
     編集を上書きしない。
 15. rendererはtemplate CSSをYAML block scalarの`style`へ埋め込み、自己完結した`.marp.md`を生成する。
     外部theme登録やcompiler固有のconfig fileを要求しない。
-16. `scientific` templateはtitleを上端に置き、H1/H2/H3を44/36/28pxで段階化し、図と表を中央配置する。
-    本文は24px、表は20pxとし、白地、濃い文字、青1色のaccent、余白を基本にする。
+16. `scientific` templateはtitleを上端に置き、H1/H2/H3を52/44/36px（約39/33/27pt）で段階化し、
+    図と表を中央配置する。本文は28px（約21pt）、captionは20px（約15pt）、表は22px、複数表は20pxとし、
+    白地、濃い文字、青1色のaccent、余白を基本にする。
 17. CLIの`--template`とHTTPの`template` queryはclosed enumとし、現時点の値は`scientific`だけとする。
 18. unordered listはlevel 1/2/3を`■`/`●`/`▲`で表示する。italicだけのparagraphを図表captionの
     Markdown contractとし、図、表、captionを個別に中央配置する。同一slideに複数の表がある場合は縦に並べ、
     表のfontとcell paddingをcompact化する。
 19. unordered listのlevel 1/2/3は32/28/24px（96dpi換算で約24/21/18pt）とする。箇条書き、図、caption、
-    最後の`> **LEAD:** ...` blockquoteが同じslideにある場合は、図を260px以内へ抑え、LEADを24pxの
-    centered takeawayとして表示する。
+    最後の`> **LEAD:** ...` blockquoteが同じslideにある場合は、図を250px以内へ抑え、LEADを28pxの
+    centered takeawayとして表示する。LEADは14pxの角丸と2pxの内側outlineで囲む。
+20. `Conclusion:`等のsemantic labelをvisual templateが自動挿入・着色してはならない。Markdownで明示した
+    `**...**`だけを本文色のfont-weight 800で強調し、青文字にはしない。
 
 ## Verification plan
 
@@ -91,9 +94,10 @@ presentation固有設定を出力へ閉じ込められる。slideごとの大幅
 - fake executableで固定argument、shell non-expansion、missing/failure/timeout boundaryを確認すること。
 - HTML previewが`text/html`で返り、sourceとeventを変更しないこと。
 - visual templateの初期化、user overrideのnon-overwrite、Marp frontmatterへの埋め込みを確認すること。
-- HTMLを実renderし、titleが上端、H1/H2/H3が44/36/28px、図表のcenter deltaが0pxであることを確認すること。
+- HTMLを実renderし、titleが上端、H1/H2/H3が52/44/36px、図表のcenter deltaが0pxであることを確認すること。
 - 3-level listのmarker、図caption、2つの表と各caption、slide overflowをbrowser computed styleで確認すること。
-- 箇条書き、図、caption、LEADの順序、32/28/24pxの階層、24px LEAD、overflow 0pxを確認すること。
+- 箇条書き、図、caption、LEADの順序、32/28/24pxの階層、28px角丸LEAD、overflow 0pxを確認すること。
+- explicit strongが本文色のweight 800で、sampleへ不要なsemantic labelがないことを確認すること。
 - 全Knowledge testsと全repository testsを実行すること。
 
 ## Consequences

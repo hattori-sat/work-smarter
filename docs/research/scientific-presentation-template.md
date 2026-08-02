@@ -36,23 +36,26 @@ userが編集でき、生成物がself-containedになる。CSSが各生成物�
 ## Applied inferences
 
 - titleと各slide headingは上端に固定し、視線の開始位置を安定させる。
-- H1/H2/H3は44/36/28px、本文24px、表20pxとし、3段の明確なhierarchyを作る。
+- H1/H2/H3は52/44/36px（約39/33/27pt）、本文28px（約21pt）とし、3段の明確なhierarchyを作る。
+- captionは20px（約15pt）、表は22px、複数表は20pxとし、補助情報も投影時に読める下限を保つ。
 - white/near-white背景、濃色文字、blue accent 1色を基本にする。
 - image、SVG、tableを水平方向の中央へ置き、figure captionも中央揃えにする。
 - unordered listの3階層を`■`/`●`/`▲`で明示し、indentとshapeの両方でhierarchyを示す。
 - list本文は32/28/24px（約24/21/18pt）とし、shape、indent、sizeの3要素でhierarchyを示す。
 - 複数表はwide tableにも対応しやすい縦配置とし、2枚以上の場合だけ文字と余白をcompact化する。
-- 箇条書き、visual evidence、caption、最後のLEADをsource順に配置し、LEADは24pxのtakeaway boxにする。
+- 箇条書き、visual evidence、caption、最後のLEADをsource順に配置し、LEADは28px、角丸14pxのtakeaway boxにする。
+- templateは`Conclusion:`等のlabelを自動生成せず、authorが`**...**`で選んだ語句だけを本文色の太字にする。
 - bodyを自動縮小せず、overflow時はcontent編集で1 slide 1 messageへ戻す。
 
 ## Verification
 
-- Marp CLIで10 slidesのHTML sampleを生成した。
-- browser computed styleでH1/H2/H3が44/36/28px、図と表のcenter deltaが0pxであることを確認した。
+- Marp CLIで11 slidesのHTML sampleを生成した。
+- browser computed styleでH1/H2/H3が52/44/36px、図と表のcenter deltaが0pxであることを確認した。
 - titleがvertical centerになった初回sampleを発見し、`align-content: start`で上端配置へ修正した。
 - 3-level listのmarkerを`■`/`●`/`▲`、indentを31/61/90pxとしてbrowserで確認した。
 - 図、図番号、2つの表、2つの表番号のcenter deltaがすべて0px、slide overflowが0pxであることを確認した。
-- list→figure→caption→LEADの順序、list 32/28/24px、LEAD 24px、slide overflow 0pxを確認した。
+- list→figure→caption→LEADの順序、list 32/28/24px、LEAD 28px、slide overflow 0pxを確認した。
+- explicit strongが本文色のweight 800、LEADが14px radiusと2px inset outlineであることを確認した。
 
 ## Unknowns
 

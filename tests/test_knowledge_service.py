@@ -93,6 +93,10 @@ def test_feature_registers_independent_persistence_and_templates(tmp_path: Path)
     assert "h1" in theme_content
     assert "h2" in theme_content
     assert "h3" in theme_content
+    assert "font-size: 52px" in theme_content
+    assert "font-size: 44px" in theme_content
+    assert "font-size: 36px" in theme_content
+    assert "strong {\n  color: var(--ws-ink);\n  font-weight: 800" in theme_content
     assert 'content: "■"' in theme_content
     assert 'content: "●"' in theme_content
     assert 'content: "▲"' in theme_content
@@ -104,8 +108,11 @@ def test_feature_registers_independent_persistence_and_templates(tmp_path: Path)
     assert "width: max-content" in theme_content
     assert "section:has(table ~ table) table" in theme_content
     assert "section:has(ul):has(img):has(blockquote:last-child)" in theme_content
-    assert "max-height: 260px" in theme_content
-    assert "font-size: 24px;\n  font-weight: 600" in theme_content
+    assert "max-height: 250px" in theme_content
+    assert "border-radius: 14px" in theme_content
+    assert "box-sizing: border-box" in theme_content
+    assert "box-shadow: inset 0 0 0 2px var(--ws-accent)" in theme_content
+    assert "font-size: 28px;\n  font-weight: 600" in theme_content
 
     scientific_theme.write_text("section { color: rebeccapurple; }\n", encoding="utf-8")
     for initializer in registry.workspace_initializers:
