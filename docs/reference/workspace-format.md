@@ -25,6 +25,7 @@ Targetの正本境界は[ADR 0003](../architecture/0003-hybrid-source-of-truth-a
 | `archive/inbox/` | GTD | raw captureとclarify disposition |
 | `templates/gtd/` | GTD/user | body template |
 | `templates/knowledge/` | Knowledge/user | note type別body template |
+| `templates/knowledge/presentations/` | Knowledge/user | Marp visual template CSS |
 | `.work-smarter/` | core | config、監査event、SQLite database、lock、provider state |
 
 `knowledge/gtd/`と`knowledge/notes/`は同じ親directoryにあるが、前者はGTD、後者はKnowledgeが所有する。
@@ -124,7 +125,7 @@ Canaryの結果を見て段階的にreleaseする。
 
 Knowledge固有rule:
 
-- `note_type`は`note`, `decision`, `how_to`, `reference`, `meeting_note`のいずれか。
+- `note_type`は`note`, `decision`, `how_to`, `reference`, `meeting_note`, `technical_report`のいずれか。
 - tagはtrim、lowercase、unique、sortされる。
 - aliasはcase-insensitiveにKnowledge note間で一意である。
 - linkはworkspace entityのstable IDをtargetにし、self/missing/ambiguous/duplicate target relationを拒否する。
@@ -157,10 +158,14 @@ duplicate、ambiguous linkを検証する。
 - `templates/knowledge/how_to.md`
 - `templates/knowledge/reference.md`
 - `templates/knowledge/meeting_note.md`
+- `templates/knowledge/technical_report.md`
+- `templates/knowledge/presentations/scientific.css`
 
 GTD templateでは`{{ intent }}`、`{{ outcome }}`、`{{ source_id }}` が置換される。Knowledge templateでは
-現在`{{ title }}`を利用できる。templateはfrontmatterではなく本文だけを定義するため、schema invariantは
-applicationが保持する。
+現在`{{ title }}`を利用できる。body templateはfrontmatterを定義しないため、schema invariantはapplicationが
+保持する。`scientific.css`はMarp presentationの`style` directiveへ埋め込まれるvisual templateで、title上端、
+H1/H2/H3の階層、図表中央配置を既定とする。すべてのtemplateはuser編集可能で、再initしても既存fileを
+上書きしない。
 
 ## Events
 

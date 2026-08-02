@@ -13,7 +13,7 @@ source、stable-ID link、backlink、検索から再発見できるようにす�
 
 1. Knowledgeが独自のmodel、repository codec、service、template、CLI、HTTP contractを持つ。
 2. 1 noteを1 Markdownとして保存し、VS Codeで安全に直接編集できる。
-3. note、decision、how-to、reference、meeting-noteを用途別templateから作れる。
+3. note、decision、how-to、reference、meeting-note、technical-reportを用途別templateから作れる。
 4. tagとaliasを正規化し、title/tag/body/aliasを検索できる。
 5. workspace entityへのoutbound linkを検証し、backlinkを導出できる。
 6. generic workspace recordをprivate feature modelへの依存なしでKnowledgeへpromoteできる。
@@ -29,6 +29,9 @@ source、stable-ID link、backlink、検索から再発見できるようにす�
 - cross-feature relationはstable IDとgeneric `EntityRecord` public attributesだけを使う。
 - fresh workspaceは`gtd`と`knowledge`を有効にする。既存configのfeature listは暗黙変更しない。
 - current searchは永続indexを持たず、note集合をcase-insensitive substring scanする。
+- Marp presentationはKnowledge revisionから再生成できるread-only projectionである。
+- HTML previewはoptional `MarpCompiler` Portの出力であり、Knowledge正本ではない。
+- Marp visual templateはclosed enumで選択し、workspaceのuser-overridable CSSをprojectionへinline化する。
 
 ## Inferences
 
@@ -41,7 +44,7 @@ source、stable-ID link、backlink、検索から再発見できるようにす�
 ## Hypotheses and unknowns
 
 - Hypothesis: 個人規模では逐次substring searchで十分な応答時間を保てる。
-- Hypothesis: 5種類のnote typeで、初期dogfoodingの大半を無理なく分類できる。
+- Hypothesis: technical-report templateの結論先行sectionが、発表資料作成時の並べ替えを減らす。
 - UNKNOWN: note数が何件になった時点で検索indexが必要になるか。
 - UNKNOWN: semantic searchとautomatic link suggestionが、誤関連の確認costを上回る価値を持つか。
 - UNKNOWN: Markdown writeとevent appendの間でprocessが停止した場合の一般的なrecovery/outbox方式。
@@ -97,7 +100,7 @@ revision: 2
 | `schema_version` | current valueは`1` |
 | `id` | workspace-global stable ID。既定は`KN-` + 12桁hex |
 | `kind` | literal `knowledge_note` |
-| `note_type` | `note`, `decision`, `how_to`, `reference`, `meeting_note` |
+| `note_type` | `note`, `decision`, `how_to`, `reference`, `meeting_note`, `technical_report` |
 | `title` | trim後nonblank |
 | `tags` | trim、lowercase、重複除去、sort |
 | `aliases` | trim、case-insensitive重複除去。Knowledge note間で一意 |
@@ -165,7 +168,7 @@ Eventは`.work-smarter/events.ndjson`へ追記する。現在snapshotはMarkdown
 ## Public adapters
 
 CLIは`ws knowledge`配下に`add`, `show`, `list`, `search`, `update`, `link`, `backlinks`, `promote`,
-`doctor`を持つ。full IDとunique prefixを受け付け、Knowledge queryはexact unique aliasも受け付ける。
+`doctor`, `presentation render`を持つ。full IDとunique prefixを受け付け、Knowledge queryはexact unique aliasも受け付ける。
 root `--json` modeはpromptやhuman textをstdoutへ混ぜない。
 
 HTTPは次のtyped routeを持つ。
@@ -178,6 +181,8 @@ HTTPは次のtyped routeを持つ。
 | backlinks | `GET /api/knowledge/backlinks/{target_id}` |
 | promote | `POST /api/knowledge/records/{record_id}/promote` |
 | doctor | `GET /api/knowledge/doctor` |
+| Marp presentation | `GET /api/knowledge/notes/{id}/presentations/marp` |
+| Marp HTML preview | `GET /api/knowledge/notes/{id}/presentations/marp/html` |
 
 Request modelはunknown fieldを拒否し、OpenAPI responseは`KnowledgeDocument`などのpublic Pydantic modelで型付け
 する。missing entityは404、Knowledge domain conflict/link errorは400へmappingする。
@@ -189,4 +194,4 @@ Request modelはunknown fieldを拒否し、OpenAPI responseは`KnowledgeDocumen
 - full-text/semantic index、ranking、graph visualization
 - multi-user permission、remote collaboration、merge conflict resolution
 - automatic taxonomy、automatic link suggestion
-
+- MarpからPDF、PPTX、imageへのbinary compile、複数visual template

@@ -30,6 +30,7 @@ ws init
 | `how_to` | 再現可能な手順 | Goal, Prerequisites, Procedure, Verification |
 | `reference` | 外部資料や調査結果 | Summary, Extracts, Sources |
 | `meeting_note` | 会議記録 | Attendees, Agenda, Notes, Decisions, Actions |
+| `technical_report` | 技術報告と発表 | Executive Summary, Objective, Method, Results, Evidence, Limitations and Unknowns, Conclusion, Next Actions, Sources |
 
 typeを省略すると`note`です。本文を省略すると`templates/knowledge/<type>.md`が使われます。
 
@@ -165,11 +166,121 @@ ws --json knowledge search "release" --field tag
 local APIを使う場合は`ws serve`を起動し、`/api/knowledge/*`を利用します。request/response schemaは
 `/openapi.json`で確認できます。
 
+## Create a Marp technical report
+
+発表用の技術報告は`technical_report` templateから作成します。本文の`##`見出しが1枚のslideになります。
+
+```bash
+ws knowledge add "Database adapter移行報告" --type technical_report
+ws knowledge presentation render KN-12AB --output adapter-rollout.marp.md
+```
+
+既存のKnowledge noteも同じcommandで投影できます。既定の`scientific` templateは、titleを上端、図表を中央、
+H1/H2/H3を大・中・小の順に配置します。`--theme`、`--template scientific`、`--no-paginate`を指定でき、
+既存出力を置換する場合だけ`--force`が必要です。
+
+```bash
+ws knowledge presentation render ship-plan \
+  --template scientific \
+  --theme gaia \
+  --no-paginate \
+  --output release-report.marp.md
+```
+
+生成された`.marp.md`にはsource IDとrevisionが入り、元のKnowledge fileや監査eventは変更されません。
+Work SmarterはMarp CLIを同梱・暗黙downloadしません。HTML previewを使う場合はMarp CLIをinstallし、
+`marp`をPATHへ置きます。別の場所にある場合は単一のexecutable pathを設定します。
+
+```bash
+npm install -g @marp-team/marp-cli
+# または: brew install marp-cli
+
+export WORK_SMARTER_MARP_CLI=/path/to/marp
+```
+
+HTML fileへrenderするとbrowserで実際のtheme、pagination、slide navigationを確認できます。
+
+```bash
+ws knowledge presentation render KN-12AB \
+  --format html \
+  --output adapter-rollout.html
+```
+
+色、font、余白、図表サイズを変える場合はworkspace内の次のfileを編集します。
+
+```text
+templates/knowledge/presentations/scientific.css
+```
+
+このCSSは生成する`.marp.md`へ埋め込まれるため、別途Marp themeを登録する必要はありません。`ws init`を
+再実行しても編集済みCSSは上書きされません。
+
+unordered listはMarkdownのnestをそのまま使います。level 1/2/3は`■`/`●`/`▲`、文字サイズは
+32/28/24pxです。96dpiのCSS換算では約24/21/18ptに相当します。
+
+見出しはH1/H2/H3が52/44/36px（約39/33/27pt）、通常本文は28px（約21pt）、図表captionは20px
+（約15pt）です。強調したい語句だけを`**...**`で囲みます。強調は青文字ではなく、本文色の太字になります。
+
+```markdown
+- 第一階層
+  - 第二階層
+    - 第三階層
+```
+
+図表番号はitalic paragraphとして対象の直後へ書きます。図、表、captionはそれぞれ中央配置されます。
+
+```markdown
+![検証時間](verification.svg)
+
+*図 1. 検証時間の推移。*
+
+| Adapter | Result |
+|---|---|
+| SQLite | Passed |
+
+*表 1. Adapter検証結果。*
+```
+
+同じslideに表が2つ以上ある場合も、各tableとcaptionをこの順で繰り返します。表は縦に独立して中央配置され、
+複数表があるslideだけfontとcell paddingがcompactになります。
+
+箇条書きの下に図、その下に最後のLEAD文を置く場合は、同じ`##` section内へ次の順番で書きます。
+
+```markdown
+## Message Flow
+
+- 最初に伝える**結論**
+  - 結論を支える**根拠**
+    - 制約または**未確認事項**
+
+![構成図](architecture.svg)
+
+*図 2. 結論と根拠を示す構成図。*
+
+> **LEAD:** 最後に聞き手へ残したい一文を書きます。
+```
+
+この4要素が揃うと、templateは図を高さ250px以内へ調整し、最後のLEADを28px（約21pt）の中央揃え、
+角丸14pxのtakeaway boxとして表示します。`Conclusion:`などのlabelは自動追加されません。Knowledge本文には
+Marp固有classを書く必要がありません。
+
+`--json`と`--format html`を組み合わせるとsource metadataとHTMLをJSONで返します。Marp CLIがない場合は
+installまたは`WORK_SMARTER_MARP_CLI`設定を案内するerrorになります。command argumentを環境変数へ含めることは
+できません。
+
+APIからは次のread-only routeを使用します。最初はJSONのMarp projection、2番目はbrowserで直接開けるHTMLです。
+
+```text
+GET /api/knowledge/notes/{id}/presentations/marp?template=scientific&theme=default&paginate=true
+GET /api/knowledge/notes/{id}/presentations/marp/html?template=scientific&theme=default&paginate=true
+```
+
 ## Current limits
 
 - 検索index、ranking、stemming、fuzzy searchはなく、現在のnoteを逐次検索する。
 - 添付ファイルのcopy、version管理、content extractionは行わない。
 - promotion後の双方向同期は行わない。
 - Confluence push/pullとprovider mappingはKnowledgeではなく、後続のpublishing featureで扱う。
+- MarpからPDF/PPTX/imageへのcompileは行わない。
+- visual templateは現在`scientific`だけで、speaker notesやaudience別variantはない。
 - graph visualization、automatic link suggestion、semantic/embedding searchは未実装。
-

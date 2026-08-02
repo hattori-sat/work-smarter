@@ -17,14 +17,19 @@ from work_smarter.knowledge.models import (
     KnowledgeLinkType,
     KnowledgeNote,
     KnowledgeNoteType,
+    KnowledgePresentationMode,
     KnowledgeSearchField,
+    MarpPresentation,
+    MarpPresentationTemplate,
     SourceReference,
     SourceReferenceKind,
 )
 from work_smarter.knowledge.persistence import KNOWLEDGE_ENTITY_SPECS
+from work_smarter.knowledge.presentations import MarpCompiler
 from work_smarter.knowledge.service import KnowledgeService
 from work_smarter.knowledge.templates import (
     initialize_knowledge_templates,
+    presentation_template_path,
     template_path,
 )
 from work_smarter.storage.workspace import EntityRegistry, EntitySpec, Workspace
@@ -73,6 +78,47 @@ def test_feature_registers_independent_persistence_and_templates(tmp_path: Path)
         initializer(workspace)
     assert decision_template.read_text(encoding="utf-8") == "# My decision template\n"
 
+    technical_report_template = template_path(workspace, KnowledgeNoteType.TECHNICAL_REPORT)
+    assert "## Objective" in technical_report_template.read_text(encoding="utf-8")
+    assert "## Method" in technical_report_template.read_text(encoding="utf-8")
+
+    scientific_theme = presentation_template_path(
+        workspace,
+        MarpPresentationTemplate.SCIENTIFIC,
+    )
+    theme_content = scientific_theme.read_text(encoding="utf-8")
+    assert "align-content: start" in theme_content
+    assert "justify-content: flex-start" in theme_content
+    assert "section img" in theme_content
+    assert "h1" in theme_content
+    assert "h2" in theme_content
+    assert "h3" in theme_content
+    assert "font-size: 52px" in theme_content
+    assert "font-size: 44px" in theme_content
+    assert "font-size: 36px" in theme_content
+    assert "strong {\n  color: var(--ws-ink);\n  font-weight: 800" in theme_content
+    assert 'content: "■"' in theme_content
+    assert 'content: "●"' in theme_content
+    assert 'content: "▲"' in theme_content
+    assert "font-size: 32px" in theme_content
+    assert "font-size: 28px" in theme_content
+    assert "font-size: 24px" in theme_content
+    assert "p:has(> em:only-child)" in theme_content
+    assert "margin: 10px auto 4px" in theme_content
+    assert "width: max-content" in theme_content
+    assert "section:has(table ~ table) table" in theme_content
+    assert "section:has(ul):has(img):has(blockquote:last-child)" in theme_content
+    assert "max-height: 250px" in theme_content
+    assert "border-radius: 14px" in theme_content
+    assert "box-sizing: border-box" in theme_content
+    assert "box-shadow: inset 0 0 0 2px var(--ws-accent)" in theme_content
+    assert "font-size: 28px;\n  font-weight: 600" in theme_content
+
+    scientific_theme.write_text("section { color: rebeccapurple; }\n", encoding="utf-8")
+    for initializer in registry.workspace_initializers:
+        initializer(workspace)
+    assert scientific_theme.read_text(encoding="utf-8") == ("section { color: rebeccapurple; }\n")
+
 
 def test_knowledge_package_does_not_import_gtd() -> None:
     source_root = Path(__file__).parents[1] / "src"
@@ -104,6 +150,7 @@ def test_schema_covers_all_note_types_and_rejects_unknown_metadata() -> None:
         "how_to",
         "reference",
         "meeting_note",
+        "technical_report",
     }
 
     with pytest.raises(ValidationError):
@@ -114,6 +161,117 @@ def test_schema_covers_all_note_types_and_rejects_unknown_metadata() -> None:
                 "unexpected": True,
             }
         )
+
+
+def test_technical_report_template_renders_as_read_only_marp_projection(
+    knowledge: KnowledgeService,
+    knowledge_workspace: Workspace,
+) -> None:
+    created = knowledge.create(
+        title="Database adapter rollout",
+        note_type=KnowledgeNoteType.TECHNICAL_REPORT,
+        body=(
+            "## Executive Summary\n\nAdapters remove database lock-in.\n\n"
+            "## Evidence\n\n- SQLite acceptance is green.\n\n"
+            "```python\n## This is code, not a slide\n```\n"
+        ),
+    )
+    source_path = knowledge_workspace.root / created.path
+    source_before = source_path.read_bytes()
+    events_before = knowledge_workspace.event_store.read_all()
+
+    presentation = knowledge.render_presentation(
+        created.note.id[:12],
+        mode=KnowledgePresentationMode.TECHNICAL_REPORT,
+        theme="gaia",
+        paginate=False,
+    )
+
+    assert presentation.source_id == created.note.id
+    assert presentation.source_revision == 1
+    assert presentation.mode is KnowledgePresentationMode.TECHNICAL_REPORT
+    assert presentation.template is MarpPresentationTemplate.SCIENTIFIC
+    assert presentation.theme == "gaia"
+    assert presentation.paginate is False
+    assert presentation.media_type == "text/markdown"
+    assert presentation.file_extension == ".marp.md"
+    assert presentation.markdown.startswith(
+        "---\nmarp: true\ntheme: gaia\npaginate: false\nstyle: |\n"
+    )
+    assert "  section {" in presentation.markdown
+    assert "    justify-content: flex-start;" in presentation.markdown
+    assert "  section img," in presentation.markdown
+    assert "# Database adapter rollout" in presentation.markdown
+    assert "<!-- Source: " + created.note.id + "@1 -->" in presentation.markdown
+    assert "\n---\n\n## Executive Summary" in presentation.markdown
+    assert "\n---\n\n## Evidence" in presentation.markdown
+    assert "\n---\n\n## This is code" not in presentation.markdown
+    assert "```python\n## This is code, not a slide\n```" in presentation.markdown
+    assert source_path.read_bytes() == source_before
+    assert knowledge_workspace.event_store.read_all() == events_before
+
+
+def test_marp_projection_uses_user_overridden_scientific_theme(
+    knowledge: KnowledgeService,
+    knowledge_workspace: Workspace,
+) -> None:
+    presentation_template_path(
+        knowledge_workspace,
+        MarpPresentationTemplate.SCIENTIFIC,
+    ).write_text(
+        "section { background: #123456; }\n",
+        encoding="utf-8",
+    )
+    created = knowledge.create(title="Custom scientific style")
+
+    rendered = knowledge.render_presentation(created.note.id)
+
+    assert rendered.template is MarpPresentationTemplate.SCIENTIFIC
+    assert "  section { background: #123456; }" in rendered.markdown
+
+
+def test_marp_projection_rejects_unsafe_theme_without_side_effects(
+    knowledge: KnowledgeService,
+    knowledge_workspace: Workspace,
+) -> None:
+    created = knowledge.create(title="Safe projection")
+    events_before = knowledge_workspace.event_store.read_all()
+
+    with pytest.raises(ValidationError, match="theme"):
+        knowledge.render_presentation(created.note.id, theme="default\npaginate: false")
+
+    assert knowledge_workspace.event_store.read_all() == events_before
+
+
+def test_html_preview_compiles_projection_without_mutating_knowledge(
+    knowledge: KnowledgeService,
+    knowledge_workspace: Workspace,
+) -> None:
+    class FakeCompiler(MarpCompiler):
+        def compile_html(self, presentation: MarpPresentation) -> str:
+            return f"<!doctype html><title>{presentation.source_id}</title>"
+
+    created = knowledge.create(
+        title="HTML preview",
+        note_type=KnowledgeNoteType.TECHNICAL_REPORT,
+        body="## Outcome\n\nPreviewed.\n",
+    )
+    source_path = knowledge_workspace.root / created.path
+    source_before = source_path.read_bytes()
+    events_before = knowledge_workspace.event_store.read_all()
+
+    rendered = knowledge.render_html_presentation(
+        created.note.id[:12],
+        compiler=FakeCompiler(),
+    )
+
+    assert rendered.source_id == created.note.id
+    assert rendered.source_revision == 1
+    assert rendered.media_type == "text/html"
+    assert rendered.file_extension == ".html"
+    assert rendered.html.startswith("<!doctype html>")
+    assert source_path.read_bytes() == source_before
+    assert knowledge_workspace.event_store.read_all() == events_before
 
 
 def test_create_normalizes_metadata_preserves_markdown_and_reloads(

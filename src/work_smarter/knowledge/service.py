@@ -32,13 +32,22 @@ from work_smarter.knowledge.models import (
     KnowledgeLink,
     KnowledgeNote,
     KnowledgeNoteType,
+    KnowledgePresentationMode,
     KnowledgeSearchField,
     KnowledgeSearchHit,
+    MarpHtmlPresentation,
+    MarpPresentation,
+    MarpPresentationTemplate,
     SourceReference,
     SourceReferenceKind,
     utc_now,
 )
-from work_smarter.knowledge.templates import render_knowledge_template
+from work_smarter.knowledge.presentations import (
+    MarpCompiler,
+    render_marp_html,
+    render_marp_presentation,
+)
+from work_smarter.knowledge.templates import render_knowledge_template, render_presentation_template
 from work_smarter.storage.events import Event, EventStore
 from work_smarter.storage.workspace import EntityRecord, Workspace
 
@@ -254,6 +263,47 @@ class KnowledgeService:
         """Resolve a full ID, unique ID prefix, or exact unique alias."""
 
         return self._document(self._note_record(query))
+
+    def render_presentation(
+        self,
+        query: str,
+        *,
+        mode: KnowledgePresentationMode | str = KnowledgePresentationMode.TECHNICAL_REPORT,
+        template: MarpPresentationTemplate | str = MarpPresentationTemplate.SCIENTIFIC,
+        theme: str = "default",
+        paginate: bool = True,
+    ) -> MarpPresentation:
+        """Project one immutable note revision into presentation-ready Marp Markdown."""
+
+        return render_marp_presentation(
+            self.get(query),
+            mode=mode,
+            template=template,
+            style=render_presentation_template(self.workspace, template),
+            theme=theme,
+            paginate=paginate,
+        )
+
+    def render_html_presentation(
+        self,
+        query: str,
+        *,
+        compiler: MarpCompiler,
+        mode: KnowledgePresentationMode | str = KnowledgePresentationMode.TECHNICAL_REPORT,
+        template: MarpPresentationTemplate | str = MarpPresentationTemplate.SCIENTIFIC,
+        theme: str = "default",
+        paginate: bool = True,
+    ) -> MarpHtmlPresentation:
+        """Compile one read-only Marp projection into browser-ready HTML."""
+
+        presentation = self.render_presentation(
+            query,
+            mode=mode,
+            template=template,
+            theme=theme,
+            paginate=paginate,
+        )
+        return render_marp_html(presentation, compiler=compiler)
 
     def list(
         self,

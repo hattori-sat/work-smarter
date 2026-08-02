@@ -38,6 +38,26 @@ class KnowledgeNoteType(StrEnum):
     HOW_TO = "how_to"
     REFERENCE = "reference"
     MEETING_NOTE = "meeting_note"
+    TECHNICAL_REPORT = "technical_report"
+
+
+class KnowledgePresentationMode(StrEnum):
+    """Supported narrative-to-presentation projections."""
+
+    TECHNICAL_REPORT = "technical_report"
+
+
+class MarpPresentationFormat(StrEnum):
+    """Output formats supported by the presentation adapter."""
+
+    MARKDOWN = "markdown"
+    HTML = "html"
+
+
+class MarpPresentationTemplate(StrEnum):
+    """User-overridable visual templates for Marp projections."""
+
+    SCIENTIFIC = "scientific"
 
 
 class KnowledgeLinkType(StrEnum):
@@ -181,6 +201,44 @@ class KnowledgeDocument(StrictModel):
     path: str
 
 
+class MarpPresentation(StrictModel):
+    """A reproducible Marp Markdown projection of one knowledge revision."""
+
+    source_id: str
+    source_revision: int = Field(ge=1)
+    mode: KnowledgePresentationMode = KnowledgePresentationMode.TECHNICAL_REPORT
+    template: MarpPresentationTemplate = MarpPresentationTemplate.SCIENTIFIC
+    theme: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+    paginate: bool = True
+    media_type: Literal["text/markdown"] = "text/markdown"
+    file_extension: Literal[".marp.md"] = ".marp.md"
+    markdown: str
+
+    @field_validator("source_id")
+    @classmethod
+    def validate_source_id(cls, value: str) -> str:
+        return _stable_id(value, field_name="presentation source ID")
+
+
+class MarpHtmlPresentation(StrictModel):
+    """Browser-ready HTML compiled from one Marp projection."""
+
+    source_id: str
+    source_revision: int = Field(ge=1)
+    mode: KnowledgePresentationMode
+    template: MarpPresentationTemplate
+    theme: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+    paginate: bool
+    media_type: Literal["text/html"] = "text/html"
+    file_extension: Literal[".html"] = ".html"
+    html: str = Field(min_length=1)
+
+    @field_validator("source_id")
+    @classmethod
+    def validate_source_id(cls, value: str) -> str:
+        return _stable_id(value, field_name="presentation source ID")
+
+
 class KnowledgeSearchHit(StrictModel):
     note: KnowledgeNote
     body: str
@@ -222,8 +280,13 @@ __all__ = [
     "KnowledgeLinkType",
     "KnowledgeNote",
     "KnowledgeNoteType",
+    "KnowledgePresentationMode",
     "KnowledgeSearchField",
     "KnowledgeSearchHit",
+    "MarpHtmlPresentation",
+    "MarpPresentation",
+    "MarpPresentationFormat",
+    "MarpPresentationTemplate",
     "SourceReference",
     "SourceReferenceKind",
     "utc_now",

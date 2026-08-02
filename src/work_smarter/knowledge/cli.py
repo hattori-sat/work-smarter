@@ -7,15 +7,19 @@ from pathlib import Path
 from typing import Annotated, Protocol, cast
 
 import typer
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from work_smarter.errors import EntityNotFoundError
+from work_smarter.knowledge.marp import MarpCliCompiler
 from work_smarter.knowledge.models import (
     KnowledgeDocument,
     KnowledgeLink,
     KnowledgeLinkType,
     KnowledgeNoteType,
+    KnowledgePresentationMode,
     KnowledgeSearchField,
+    MarpPresentationFormat,
+    MarpPresentationTemplate,
     SourceReference,
     SourceReferenceKind,
 )
@@ -26,6 +30,11 @@ app = typer.Typer(
     help="Capture, connect, search, and maintain Markdown knowledge notes.",
     no_args_is_help=True,
 )
+presentation_app = typer.Typer(
+    help="Render knowledge as presentation projections.",
+    no_args_is_help=True,
+)
+app.add_typer(presentation_app, name="presentation")
 
 
 class _RootCliState(Protocol):
@@ -188,6 +197,84 @@ def _replacement[T](
             param_hint=option,
         )
     return [] if clear else values
+
+
+def _write_projection(output: Path, content: str, *, force: bool) -> None:
+    if output.exists() and not force:
+        raise typer.BadParameter(
+            "output exists; pass --force to overwrite",
+            param_hint="--output",
+        )
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(content, encoding="utf-8")
+
+
+@presentation_app.command("render")
+def render_presentation(
+    ctx: typer.Context,
+    note_id: Annotated[str, typer.Argument(help="Note ID, unique prefix, or exact alias.")],
+    mode: Annotated[
+        KnowledgePresentationMode,
+        typer.Option("--mode", case_sensitive=False, help="Presentation narrative mode."),
+    ] = KnowledgePresentationMode.TECHNICAL_REPORT,
+    theme: Annotated[str, typer.Option(help="Marp theme name.")] = "default",
+    presentation_template: Annotated[
+        MarpPresentationTemplate,
+        typer.Option("--template", case_sensitive=False, help="Visual template."),
+    ] = MarpPresentationTemplate.SCIENTIFIC,
+    paginate: Annotated[
+        bool,
+        typer.Option("--paginate/--no-paginate", help="Show page numbers."),
+    ] = True,
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", "-o", help="Write the rendered presentation to a file."),
+    ] = None,
+    output_format: Annotated[
+        MarpPresentationFormat,
+        typer.Option("--format", case_sensitive=False, help="Render Markdown or HTML."),
+    ] = MarpPresentationFormat.MARKDOWN,
+    force: Annotated[bool, typer.Option(help="Replace an existing output file.")] = False,
+) -> None:
+    """Render a technical-report deck from an immutable Knowledge revision."""
+
+    try:
+        service = _service(ctx)
+        if output_format is MarpPresentationFormat.HTML:
+            rendered = service.render_html_presentation(
+                note_id,
+                compiler=MarpCliCompiler.from_environment(),
+                mode=mode,
+                template=presentation_template,
+                theme=theme,
+                paginate=paginate,
+            )
+            content = rendered.html
+        else:
+            rendered = service.render_presentation(
+                note_id,
+                mode=mode,
+                template=presentation_template,
+                theme=theme,
+                paginate=paginate,
+            )
+            content = rendered.markdown
+    except ValidationError as exc:
+        if not any(error["loc"] == ("theme",) for error in exc.errors()):
+            raise
+        raise typer.BadParameter(
+            "must start with an alphanumeric character and contain only letters, "
+            "numbers, '.', '_', or '-' (maximum 64 characters)",
+            param_hint="--theme",
+        ) from exc
+    if output is not None:
+        _write_projection(output, content, force=force)
+    if _state(ctx).json_output:
+        _emit_json(rendered)
+    elif output is not None:
+        typer.echo(str(output))
+    else:
+        typer.echo(content, nl=False)
 
 
 @app.command("add")

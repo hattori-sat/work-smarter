@@ -5,6 +5,15 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from work_smarter.api import create_app
+from work_smarter.knowledge.models import MarpPresentation
+
+
+class FakeMarpCompiler:
+    def compile_html(self, presentation: MarpPresentation) -> str:
+        return (
+            "<!doctype html><html><head><title>Preview</title></head>"
+            f'<body data-source="{presentation.source_id}">Rendered</body></html>'
+        )
 
 
 def _initialized_client(tmp_path: Path) -> TestClient:
@@ -147,6 +156,63 @@ def test_knowledge_api_promotes_any_generic_workspace_record_by_id(
         assert repeated.json() == document
 
 
+def test_knowledge_api_returns_typed_marp_projection_without_writing_source(
+    tmp_path: Path,
+) -> None:
+    with _initialized_client(tmp_path) as client:
+        created = client.post(
+            "/api/knowledge/notes",
+            json={
+                "title": "Migration report",
+                "note_type": "technical_report",
+                "body": "## Outcome\n\nMigration is ready.\n",
+            },
+        ).json()
+        note_id = created["note"]["id"]
+
+        rendered = client.get(
+            f"/api/knowledge/notes/{note_id[:12]}/presentations/marp",
+            params={"theme": "gaia", "paginate": "false"},
+        )
+
+        assert rendered.status_code == 200
+        payload = rendered.json()
+        assert payload["source_id"] == note_id
+        assert payload["source_revision"] == 1
+        assert payload["mode"] == "technical_report"
+        assert payload["template"] == "scientific"
+        assert payload["theme"] == "gaia"
+        assert payload["paginate"] is False
+        assert "## Outcome" in payload["markdown"]
+
+        unsafe = client.get(
+            f"/api/knowledge/notes/{note_id}/presentations/marp",
+            params={"theme": "default\npaginate: false"},
+        )
+        assert unsafe.status_code == 422
+
+
+def test_knowledge_api_serves_browser_ready_marp_html_preview(tmp_path: Path) -> None:
+    with TestClient(create_app(tmp_path, marp_compiler=FakeMarpCompiler())) as client:
+        assert client.post("/api/workspace/init").status_code == 201
+        created = client.post(
+            "/api/knowledge/notes",
+            json={
+                "title": "Preview report",
+                "note_type": "technical_report",
+                "body": "## Outcome\n\nVisible in a browser.\n",
+            },
+        ).json()
+        note_id = created["note"]["id"]
+
+        preview = client.get(f"/api/knowledge/notes/{note_id[:12]}/presentations/marp/html")
+
+        assert preview.status_code == 200
+        assert preview.headers["content-type"].startswith("text/html")
+        assert preview.text.startswith("<!doctype html>")
+        assert f'data-source="{note_id}"' in preview.text
+
+
 def test_knowledge_api_maps_domain_errors_and_exposes_doctor(tmp_path: Path) -> None:
     with _initialized_client(tmp_path) as client:
         first = client.post(
@@ -213,10 +279,18 @@ def test_knowledge_openapi_is_typed_for_clients(tmp_path: Path) -> None:
     doctor_response = paths["/api/knowledge/doctor"]["get"]["responses"]["200"]["content"][
         "application/json"
     ]["schema"]
+    marp_response = paths["/api/knowledge/notes/{note_id}/presentations/marp"]["get"]["responses"][
+        "200"
+    ]["content"]["application/json"]["schema"]
+    html_response = paths["/api/knowledge/notes/{note_id}/presentations/marp/html"]["get"][
+        "responses"
+    ]["200"]["content"]["text/html"]["schema"]
 
     assert create_request["$ref"] == "#/components/schemas/KnowledgeCreateRequest"
     assert create_response["$ref"] == "#/components/schemas/KnowledgeDocument"
     assert backlinks_response["items"]["$ref"] == "#/components/schemas/KnowledgeBacklink"
     assert doctor_response["$ref"] == "#/components/schemas/KnowledgeDoctorReport"
+    assert marp_response["$ref"] == "#/components/schemas/MarpPresentation"
+    assert html_response["type"] == "string"
     assert "KnowledgeLinkRequest" in schema["components"]["schemas"]
     assert "SourceReferenceRequest" in schema["components"]["schemas"]

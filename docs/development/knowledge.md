@@ -23,7 +23,9 @@ other feature ── generic EntityRecord / stable ID ──► promote or link
 - `knowledge/models.py`: strict public schema、enum、read models
 - `knowledge/service.py`: lock内のcreate/update/promote invariant、query、doctor
 - `knowledge/persistence.py`: `knowledge_note` codecと`knowledge/notes/` ownership
-- `knowledge/templates.py`: type別のuser-overridable body template
+- `knowledge/templates.py`: type別body templateとuser-overridable presentation CSS
+- `knowledge/presentations.py`: Knowledge revisionからのread-only Marp projection
+- `knowledge/marp.py`: optional Marp CLI compiler adapter
 - `knowledge/events.py`: Knowledgeが所有するstable event names
 - `knowledge/errors.py`: adapterが公開できるdomain error
 - `knowledge/cli.py`: root CLI stateを利用するkeyboard/script adapter
@@ -99,6 +101,55 @@ specを先に更新する。backlinkを別entityへ永続化してoutbound link�
 Doctorはservice writeでは通常作れないbroken/duplicate graphも、direct-edited Markdownから報告できなければ
 ならない。warningとerrorの区別、および`valid`の意味を保つ。
 
+## Presentation projections
+
+Marp technical reportはKnowledgeの別entityではなく、現在revisionから生成するread-only projectionである。
+`technical_report` note typeは発表向けsectionを持つdefault templateだが、rendererは既存noteにも利用できる。
+
+```text
+Knowledge Markdown (authority)
+        │
+        └── KnowledgeService.render_presentation()
+                         │
+                         ├── CLI stdout / .marp.md
+                         └── typed FastAPI response
+```
+
+rendererはsource file、revision、event storeを変更してはならない。Marp YAMLへ入るthemeはpublic modelで
+検証してから補間し、source titleはYAML frontmatterへ入れない。level-two headingだけをslide boundaryへ変換し、
+それ以外の本文は保持する。
+
+visual templateは`MarpPresentationTemplate`のclosed enumで選び、workspaceの
+`templates/knowledge/presentations/<template>.css`から読む。CSSはYAML block scalarの`style`へ2-space indentで
+埋め込むため、生成物は外部のtheme-set設定に依存しない。initializerはmissing CSSだけを作り、user overrideを
+上書きしない。既定`scientific` CSSのdesign根拠は
+[research note](../research/scientific-presentation-template.md)に記録する。
+
+`scientific` templateのMarkdown/CSS conventionは次のとおり。
+
+- nested unordered listはlevel 1/2/3を`■`/`●`/`▲`へ置換し、32/28/24pxへ段階化する。
+- H1/H2/H3、body、captionは52/44/36、28、20pxとし、pt guidanceを96dpiのCSS pxへ換算する。
+- explicit `strong`だけを本文色のweight 800にし、semantic labelの自動追加や青文字化を行わない。
+- inline childが`em:only-child`のparagraphを図表captionとして中央配置する。
+- tableは`max-content`幅と`max-width: 100%`を併用し、内容幅を保ちながら中央配置する。
+- `section:has(table ~ table)`で複数表を検出し、そのslideのtableだけfontとcell paddingをcompact化する。
+- 複数表は横幅を推測してgrid化せず、source順に縦配置する。
+- `section:has(ul):has(img):has(blockquote:last-child)`で「箇条書き→図→caption→LEAD」を検出し、図高を
+  250px、LEADを28pxへ固定する。LEADは14pxの角丸と2px inset outlineを持つ。SVGも同じcontractを持つ。
+
+HTML previewは`MarpCompiler` Portを介してcompileする。Application serviceはcompilerを引数で受け、CLI/APIの
+compositionが`MarpCliCompiler`を渡す。adapterは次のsecurity contractを守る。
+
+- executableはserver/process設定で選び、HTTP requestから受け取らない。
+- `subprocess.run()`へargument listを渡し、shell expansionを使わない。
+- isolated temporary directoryとtimeoutを使い、出力fileの存在とnonblankを検証する。
+- raw HTMLとlocal file accessを有効化するMarp CLI optionを暗黙追加しない。
+- missing executable、timeout、non-zero exit、missing outputをtyped errorへ変換する。
+
+`WORK_SMARTER_MARP_CLI`は単一のexecutable名またはpathであり、argumentを含むshell commandではない。
+PDF/PPTX/image compilerはbrowser runtimeを必要とするためこのsliceでは扱わない。詳細は
+[ADR 0005](../architecture/0005-marp-technical-reports-as-projections.md)を参照する。
+
 ## Promotion rules
 
 Promotionはfeature-specific importerではない。source recordのpublic shapeだけを読み、元bodyをcopyしてentity
@@ -131,6 +182,12 @@ publishing/import contractとして、remote identity、version、conflict polic
 - generic promotion、source provenance、repeat idempotency、multiple-claim conflict
 - doctor orphan/source-connected/broken/duplicate graph
 - CLI JSON purityとHTTP/OpenAPI typing/error mapping
+- Marp slide boundary、source revision、read-only behavior、unsafe theme、output overwrite refusal
+- scientific visual template、user override non-overwrite、CSS block-scalar埋め込み、CLI/API template contract
+- 3-level list marker、図表caption中央揃え、2-table compact layout、overflowなしのvisual QA
+- 24/21/18pt相当のlist階層、list→figure→caption→LEAD順序、21pt相当LEADのvisual QA
+- 39/33/27pt相当heading、21pt相当body/LEAD、15pt相当caption、explicit strongのvisual QA
+- fake Marp compiler、fixed argument、HTML media type、missing/failing compiler error
 - package import boundaryとfeature composition
 
 ```bash
@@ -143,6 +200,6 @@ publishing/import contractとして、remote identity、version、conflict polic
 
 ## Current non-goals
 
-Confluence conversion/sync、binary attachment、semantic index、multi-user collaborationはこのpackageへ実装しない。
+Confluence conversion/sync、Marp PDF/PPTX/image compile、複数visual template、binary attachment、semantic index、
+multi-user collaborationはこのpackageへ実装しない。
 それらはpublic Knowledge contractを利用する別feature/projectionとする。
-
