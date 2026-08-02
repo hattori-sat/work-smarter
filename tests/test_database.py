@@ -66,3 +66,32 @@ def test_activity_events_are_append_only(tmp_path: Path) -> None:
         database.transaction() as connection,
     ):
         connection.execute("DELETE FROM activity_events WHERE id = ?", ("EVT-1",))
+
+
+def test_online_snapshot_excludes_an_uncommitted_transaction(tmp_path: Path) -> None:
+    database = ApplicationDatabase(tmp_path / "work-smarter.db")
+    database.migrate()
+    snapshot = tmp_path / "snapshot.db"
+
+    with sqlite3.connect(database.path) as writer:
+        writer.execute("BEGIN IMMEDIATE")
+        writer.execute(
+            """
+            INSERT INTO activity_events(
+                id, aggregate_type, aggregate_id, event_type, event_version, payload
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            ("EVT-PENDING", "gtd_action", "ACT-1", "gtd.action.started", 1, "{}"),
+        )
+        database.snapshot(snapshot)
+        writer.rollback()
+
+    with sqlite3.connect(snapshot) as restored:
+        event = restored.execute(
+            "SELECT id FROM activity_events WHERE id = ?",
+            ("EVT-PENDING",),
+        ).fetchone()
+        integrity = restored.execute("PRAGMA quick_check").fetchone()
+
+    assert event is None
+    assert integrity == ("ok",)

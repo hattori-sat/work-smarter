@@ -1,18 +1,23 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import sqlite3
 import zipfile
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from work_smarter.cli import app
 from work_smarter.composition import initialize_workspace, open_workspace
+from work_smarter.errors import InvalidDocumentError
 from work_smarter.gtd.service import GtdService
 from work_smarter.knowledge.models import KnowledgeNoteType
 from work_smarter.knowledge.service import KnowledgeService
 from work_smarter.project_management.models import ProjectLifecycle
 from work_smarter.project_management.service import ProjectManagementService
+from work_smarter.shared.persistence.database import ApplicationDatabase
 from work_smarter.workspace_ops import WorkspaceOperations
 
 runner = CliRunner()
@@ -56,6 +61,98 @@ def test_backup_restore_round_trip_preserves_documents_and_events(tmp_path: Path
     reopened = open_workspace(restored_root)
     assert reopened.find_record(captured.id).entity.title == "Portable record"
     assert reopened.event_store.read_all()
+
+
+def test_backup_uses_a_consistent_sqlite_snapshot_without_wal_sidecars(tmp_path: Path) -> None:
+    workspace = initialize_workspace(tmp_path / "source")
+    database = ApplicationDatabase.for_workspace(workspace.root)
+    archive = tmp_path / "backup.ws.zip"
+    injection_payload = "EVT-1'); DROP TABLE activity_events; --"
+
+    with sqlite3.connect(database.path) as writer:
+        assert writer.execute("PRAGMA journal_mode = WAL").fetchone() == ("wal",)
+        writer.execute(
+            """
+            INSERT INTO activity_events(
+                id, aggregate_type, aggregate_id, event_type, event_version, payload
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (injection_payload, "gtd_action", "ACT-1", "gtd.action.started", 1, "{}"),
+        )
+        writer.commit()
+        assert database.path.with_name(f"{database.path.name}-wal").is_file()
+
+        WorkspaceOperations(workspace).backup(archive)
+
+    with zipfile.ZipFile(archive) as bundle:
+        names = bundle.namelist()
+        assert ".work-smarter/work-smarter.db" in names
+        assert ".work-smarter/work-smarter.db-wal" not in names
+        assert ".work-smarter/work-smarter.db-shm" not in names
+
+    restored_root = tmp_path / "restored"
+    WorkspaceOperations.restore(archive, restored_root)
+    restored_database = ApplicationDatabase.for_workspace(restored_root)
+    with sqlite3.connect(restored_database.path) as connection:
+        event = connection.execute(
+            "SELECT id FROM activity_events WHERE id = ?",
+            (injection_payload,),
+        ).fetchone()
+        table = connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = ? AND name = ?",
+            ("table", "activity_events"),
+        ).fetchone()
+
+    assert event == (injection_payload,)
+    assert table == ("activity_events",)
+
+
+def test_restore_rejects_a_checksum_valid_but_invalid_sqlite_database(tmp_path: Path) -> None:
+    archive = tmp_path / "invalid-database.ws.zip"
+    database_name = ".work-smarter/work-smarter.db"
+    database_payload = b"this is not sqlite"
+    manifest = {
+        "format": "work-smarter-backup",
+        "version": 1,
+        "files": {database_name: hashlib.sha256(database_payload).hexdigest()},
+    }
+    with zipfile.ZipFile(archive, "w") as bundle:
+        bundle.writestr(database_name, database_payload)
+        bundle.writestr("WORK-SMARTER-BACKUP.json", json.dumps(manifest))
+
+    target = tmp_path / "target"
+    with pytest.raises(InvalidDocumentError, match="application database"):
+        WorkspaceOperations.restore(archive, target)
+
+    assert not target.exists()
+
+
+def test_restore_rejects_sqlite_sidecars_instead_of_guessing_consistency(tmp_path: Path) -> None:
+    archive = tmp_path / "sidecar.ws.zip"
+    sidecar_name = ".work-smarter/work-smarter.db-wal"
+    sidecar_payload = b"untracked transaction state"
+    manifest = {
+        "format": "work-smarter-backup",
+        "version": 1,
+        "files": {sidecar_name: hashlib.sha256(sidecar_payload).hexdigest()},
+    }
+    with zipfile.ZipFile(archive, "w") as bundle:
+        bundle.writestr(sidecar_name, sidecar_payload)
+        bundle.writestr("WORK-SMARTER-BACKUP.json", json.dumps(manifest))
+
+    with pytest.raises(InvalidDocumentError, match="sidecar"):
+        WorkspaceOperations.restore(archive, tmp_path / "target")
+
+
+def test_backup_rejects_a_database_symlink_outside_the_workspace(tmp_path: Path) -> None:
+    workspace = initialize_workspace(tmp_path / "source")
+    database_path = workspace.state_dir / "work-smarter.db"
+    external_database = tmp_path / "external.db"
+    database_path.replace(external_database)
+    database_path.symlink_to(external_database)
+
+    with pytest.raises(InvalidDocumentError, match="database.*workspace"):
+        WorkspaceOperations(workspace).backup(tmp_path / "backup.ws.zip")
 
 
 def test_restore_rejects_archive_path_traversal(tmp_path: Path) -> None:

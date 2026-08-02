@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
+import tempfile
 from collections.abc import Iterator
 from contextlib import closing, contextmanager
 from dataclasses import dataclass
@@ -145,6 +147,81 @@ class ApplicationDatabase:
         except sqlite3.DatabaseError as exc:
             raise InvalidDocumentError(f"Invalid application database {self.path}: {exc}") from exc
         return DatabaseStatus(initialized=True, schema_version=int(row[0]))
+
+    def verify(self) -> DatabaseStatus:
+        """Verify SQLite integrity and the Work Smarter schema without modifying it."""
+
+        if not self.path.is_file():
+            raise InvalidDocumentError(f"Application database is missing: {self.path}")
+        try:
+            with closing(sqlite3.connect(self.path, timeout=5)) as connection:
+                integrity = connection.execute("PRAGMA quick_check").fetchone()
+                if integrity != ("ok",):
+                    detail = integrity[0] if integrity else "no integrity result"
+                    raise InvalidDocumentError(
+                        f"Invalid application database {self.path}: {detail}"
+                    )
+                table = connection.execute(
+                    """
+                    SELECT 1 FROM sqlite_master
+                    WHERE type = 'table' AND name = 'schema_migrations'
+                    """
+                ).fetchone()
+                if table is None:
+                    raise InvalidDocumentError(
+                        f"Invalid application database {self.path}: migration metadata is missing"
+                    )
+                row = connection.execute(
+                    "SELECT COALESCE(MAX(version), 0) FROM schema_migrations"
+                ).fetchone()
+        except sqlite3.DatabaseError as exc:
+            raise InvalidDocumentError(f"Invalid application database {self.path}: {exc}") from exc
+        version = int(row[0])
+        if version > LATEST_SCHEMA_VERSION:
+            raise InvalidDocumentError(
+                f"Database schema {version} is newer than this application "
+                f"(latest {LATEST_SCHEMA_VERSION})"
+            )
+        return DatabaseStatus(initialized=True, schema_version=version)
+
+    def snapshot(self, destination: Path | str) -> Path:
+        """Create an atomic, transactionally consistent online SQLite snapshot."""
+
+        target = Path(destination).expanduser().resolve()
+        if target == self.path:
+            raise InvalidDocumentError("Database snapshot destination must differ from source")
+        if not self.path.is_file():
+            raise InvalidDocumentError(f"Application database is missing: {self.path}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temporary: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                dir=target.parent,
+                prefix=f".{target.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as stream:
+                temporary = Path(stream.name)
+            with (
+                closing(self._connect()) as source,
+                closing(sqlite3.connect(temporary, timeout=5)) as snapshot,
+            ):
+                source.backup(snapshot)
+            ApplicationDatabase(temporary).verify()
+            with temporary.open("rb") as stream:
+                os.fsync(stream.fileno())
+            os.replace(temporary, target)
+        except InvalidDocumentError:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+            raise
+        except (OSError, sqlite3.DatabaseError) as exc:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+            raise InvalidDocumentError(
+                f"Cannot snapshot application database {self.path}: {exc}"
+            ) from exc
+        return target
 
     def migrate(self) -> DatabaseMigrationReport:
         self.path.parent.mkdir(parents=True, exist_ok=True)

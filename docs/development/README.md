@@ -32,6 +32,7 @@ python3.12 -m venv .venv
 
 - [Branching](branching.md)
 - [Testing](testing.md)
+- [Database persistence and SQL safety](database.md)
 - [Developing the GTD workflow](gtd-workflow.md)
 - [Developing Knowledge](knowledge.md)
 - [Developing project management](project-management.md)

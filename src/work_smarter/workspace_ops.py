@@ -17,11 +17,18 @@ from work_smarter.errors import InvalidDocumentError
 from work_smarter.gtd.service import GtdService
 from work_smarter.knowledge.service import KnowledgeService
 from work_smarter.project_management.service import ProjectManagementService
+from work_smarter.shared.persistence.database import DATABASE_NAME, ApplicationDatabase
 from work_smarter.storage.workspace import Workspace
 
 MANIFEST_NAME = "WORK-SMARTER-BACKUP.json"
 EXCLUDED_PARTS = {"cache", "secrets", "__pycache__"}
 EXCLUDED_NAMES = {"workspace.lock", ".DS_Store"}
+DATABASE_RELATIVE_PATH = f".work-smarter/{DATABASE_NAME}"
+DATABASE_SIDECARS = {
+    f"{DATABASE_RELATIVE_PATH}-journal",
+    f"{DATABASE_RELATIVE_PATH}-shm",
+    f"{DATABASE_RELATIVE_PATH}-wal",
+}
 
 
 class OperationsModel(BaseModel):
@@ -122,38 +129,64 @@ class WorkspaceOperations:
     def backup(self, destination: Path | str) -> ArchiveReport:
         archive = Path(destination).expanduser().resolve()
         archive.parent.mkdir(parents=True, exist_ok=True)
-        hashes: dict[str, str] = {}
         with self.workspace.lock():
             files = self._included_files(self.workspace.root, excluding=archive)
-            for path in files:
-                relative = path.relative_to(self.workspace.root).as_posix()
-                hashes[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
-            manifest = {
-                "format": "work-smarter-backup",
-                "version": 1,
-                "files": hashes,
-            }
-            temporary: Path | None = None
-            try:
-                with tempfile.NamedTemporaryFile(
-                    dir=archive.parent,
-                    prefix=f".{archive.name}.",
-                    suffix=".tmp",
-                    delete=False,
-                ) as stream:
-                    temporary = Path(stream.name)
-                with zipfile.ZipFile(temporary, "w", zipfile.ZIP_DEFLATED) as bundle:
-                    for path in files:
-                        bundle.write(path, path.relative_to(self.workspace.root).as_posix())
-                    bundle.writestr(MANIFEST_NAME, json.dumps(manifest, sort_keys=True))
-                os.replace(temporary, archive)
-            except OSError:
-                if temporary is not None:
-                    temporary.unlink(missing_ok=True)
-                raise
+            regular_files = [
+                path
+                for path in files
+                if path.relative_to(self.workspace.root).as_posix()
+                not in {DATABASE_RELATIVE_PATH, *DATABASE_SIDECARS}
+            ]
+            with tempfile.TemporaryDirectory(prefix="work-smarter-backup-") as temporary_dir:
+                snapshot: Path | None = None
+                database_entry = self.workspace.state_dir / DATABASE_NAME
+                database = ApplicationDatabase(database_entry)
+                if database_entry.is_symlink() or not database.path.is_relative_to(
+                    self.workspace.root
+                ):
+                    raise InvalidDocumentError(
+                        "application database must be a regular file inside the workspace"
+                    )
+                if database.path.is_file():
+                    snapshot = database.snapshot(Path(temporary_dir) / DATABASE_NAME)
+                hashes = {
+                    path.relative_to(self.workspace.root).as_posix(): hashlib.sha256(
+                        path.read_bytes()
+                    ).hexdigest()
+                    for path in regular_files
+                }
+                if snapshot is not None:
+                    hashes[DATABASE_RELATIVE_PATH] = hashlib.sha256(
+                        snapshot.read_bytes()
+                    ).hexdigest()
+                manifest = {
+                    "format": "work-smarter-backup",
+                    "version": 1,
+                    "files": hashes,
+                }
+                temporary: Path | None = None
+                try:
+                    with tempfile.NamedTemporaryFile(
+                        dir=archive.parent,
+                        prefix=f".{archive.name}.",
+                        suffix=".tmp",
+                        delete=False,
+                    ) as stream:
+                        temporary = Path(stream.name)
+                    with zipfile.ZipFile(temporary, "w", zipfile.ZIP_DEFLATED) as bundle:
+                        for path in regular_files:
+                            bundle.write(path, path.relative_to(self.workspace.root).as_posix())
+                        if snapshot is not None:
+                            bundle.write(snapshot, DATABASE_RELATIVE_PATH)
+                        bundle.writestr(MANIFEST_NAME, json.dumps(manifest, sort_keys=True))
+                    os.replace(temporary, archive)
+                except OSError:
+                    if temporary is not None:
+                        temporary.unlink(missing_ok=True)
+                    raise
         return ArchiveReport(
             archive=str(archive),
-            file_count=len(files),
+            file_count=len(hashes),
             sha256=hashlib.sha256(archive.read_bytes()).hexdigest(),
         )
 
@@ -183,6 +216,11 @@ class WorkspaceOperations:
                 expected: dict[str, str] = manifest.get("files", {})
                 if set(names) - {MANIFEST_NAME} != set(expected):
                     raise InvalidDocumentError("backup manifest does not match archive members")
+                sidecars = set(expected) & DATABASE_SIDECARS
+                if sidecars:
+                    raise InvalidDocumentError(
+                        "backup contains SQLite sidecar files instead of a consistent snapshot"
+                    )
                 payloads: dict[str, bytes] = {}
                 for name, digest in expected.items():
                     data = bundle.read(name)
@@ -191,6 +229,13 @@ class WorkspaceOperations:
                     payloads[name] = data
         except (OSError, zipfile.BadZipFile, json.JSONDecodeError) as exc:
             raise InvalidDocumentError(f"invalid workspace backup {archive}: {exc}") from exc
+
+        database_payload = payloads.get(DATABASE_RELATIVE_PATH)
+        if database_payload is not None:
+            with tempfile.TemporaryDirectory(prefix="work-smarter-restore-") as temporary_dir:
+                database_path = Path(temporary_dir) / DATABASE_NAME
+                database_path.write_bytes(database_payload)
+                ApplicationDatabase(database_path).verify()
 
         root.mkdir(parents=True, exist_ok=True)
         for name, data in payloads.items():
