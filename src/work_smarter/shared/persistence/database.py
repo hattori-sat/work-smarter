@@ -64,6 +64,159 @@ class DatabaseSnapshot:
     path: Path
 
 
+@dataclass(frozen=True, slots=True)
+class StructuredEntityState:
+    """Provider-neutral structured state owned by the application database."""
+
+    kind: str
+    entity_id: str
+    payload: dict[str, object]
+    projection_path: str
+    revision: int
+
+
+@dataclass(frozen=True, slots=True)
+class OperationJournalRecord:
+    """Durable intent spanning the database and a Markdown projection."""
+
+    id: str
+    operation_type: str
+    status: str
+    aggregate_kind: str
+    aggregate_id: str
+    payload: dict[str, object]
+    projection_path: str
+    idempotency_key: str
+    last_error: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class OutboxMessage:
+    """A leased provider-neutral delivery request."""
+
+    id: str
+    operation_id: str
+    destination: str
+    message_type: str
+    payload: dict[str, object]
+    status: str
+    attempt_count: int
+    available_at: str
+    lease_token: str | None = None
+    last_error: str | None = None
+
+
+@runtime_checkable
+class StructuredStateStore(Protocol):
+    """Domain-record, journal, activity-event, and outbox persistence port."""
+
+    def stage_entity_write(
+        self,
+        *,
+        operation_id: str,
+        idempotency_key: str,
+        kind: str,
+        entity_id: str,
+        payload: dict[str, object],
+        projection_path: str,
+    ) -> OperationJournalRecord:
+        """Persist an idempotent write intent before touching its Markdown projection."""
+
+    def legacy_import_completed(self) -> bool:
+        """Return whether legacy Markdown/JSONL ownership was imported once."""
+
+    def complete_legacy_import(self) -> None:
+        """Mark the domain ownership migration complete after all imports succeed."""
+
+    def commit_entity_write(self, operation_id: str) -> StructuredEntityState:
+        """Atomically commit staged state, activity event, and journal completion."""
+
+    def stage_entity_delete(
+        self,
+        *,
+        operation_id: str,
+        idempotency_key: str,
+        kind: str,
+        entity_id: str,
+        projection_path: str,
+    ) -> OperationJournalRecord:
+        """Persist an idempotent delete intent before removing a projection."""
+
+    def commit_entity_delete(self, operation_id: str) -> None:
+        """Atomically delete structured state and complete its journal entry."""
+
+    def fail_operation(self, operation_id: str, error: str) -> OperationJournalRecord:
+        """Mark a normally-refused operation failed without changing entity state."""
+
+    def pending_operations(self) -> list[OperationJournalRecord]:
+        """List incomplete intents in deterministic creation order."""
+
+    def get_operation(self, operation_id: str) -> OperationJournalRecord:
+        """Return one operation journal record."""
+
+    def list_operations(self, *, limit: int = 100) -> list[OperationJournalRecord]:
+        """Return recent operations newest first."""
+
+    def import_entity(
+        self,
+        *,
+        kind: str,
+        entity_id: str,
+        payload: dict[str, object],
+        projection_path: str,
+    ) -> StructuredEntityState:
+        """Import one legacy record only when no database record exists."""
+
+    def get_entity(self, kind: str, entity_id: str) -> StructuredEntityState | None:
+        """Read one authoritative structured record."""
+
+    def list_entities(self, kind: str) -> list[StructuredEntityState]:
+        """List authoritative records for one registered kind."""
+
+    def append_activity_event(self, event: dict[str, object]) -> dict[str, object]:
+        """Append one idempotent domain activity event."""
+
+    def list_activity_events(self) -> list[dict[str, object]]:
+        """Read append-only activity history in occurrence order."""
+
+    def enqueue_outbox(
+        self,
+        *,
+        message_id: str,
+        operation_id: str,
+        destination: str,
+        message_type: str,
+        payload: dict[str, object],
+        available_at: str,
+    ) -> OutboxMessage:
+        """Enqueue one idempotent external delivery."""
+
+    def claim_outbox(
+        self,
+        *,
+        lease_token: str,
+        now: str,
+        limit: int,
+    ) -> list[OutboxMessage]:
+        """Lease pending or failed messages for one worker."""
+
+    def complete_outbox(self, message_id: str, *, lease_token: str) -> OutboxMessage:
+        """Idempotently complete a leased delivery."""
+
+    def fail_outbox(
+        self,
+        message_id: str,
+        *,
+        lease_token: str,
+        error: str,
+        available_at: str,
+    ) -> OutboxMessage:
+        """Release a failed delivery for a later retry."""
+
+    def list_outbox(self, *, limit: int = 100) -> list[OutboxMessage]:
+        """Return recent outbox messages newest first."""
+
+
 @runtime_checkable
 class DatabaseBackend(Protocol):
     """Port implemented by SQLite, Access, or another persistence adapter."""
@@ -83,6 +236,15 @@ class DatabaseBackend(Protocol):
 
     def verify_snapshot(self, path: Path) -> DatabaseStatus:
         """Validate a snapshot without mutating the source workspace."""
+
+
+@runtime_checkable
+class StructuredStateBackend(Protocol):
+    """Optional backend capability used after a domain ownership migration."""
+
+    @property
+    def structured_store(self) -> StructuredStateStore:
+        """Return the backend's domain-specific structured-state ports."""
 
 
 DatabaseBackendFactory = Callable[[Path, DatabaseConfiguration], DatabaseBackend]

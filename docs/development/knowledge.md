@@ -60,7 +60,8 @@ create/update/promoteは次の順序で行う。
 5. 成功eventをappend-only event storeへ追記する。
 
 拒否時にMarkdownとevent countを変更してはならない。現在、snapshot replaceとevent appendは同一filesystem
-transactionではない。両者の間でprocessが停止した場合の一般outbox recoveryは**UNKNOWN**である。
+Database structured stateとMarkdown projectionの境界はoperation journalで回復する。外部publishは
+transactional outboxの`operation_id`をidempotency keyとして再送する。
 
 ## Schema and direct edits
 

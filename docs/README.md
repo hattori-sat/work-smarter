@@ -6,14 +6,18 @@
 - [GTD workflow](user/gtd-workflow.md)
 - [Knowledge guide](user/knowledge.md)
 - [Workspace and Markdown](user/workspace.md)
+- [System operations](user/system-operations.md)
 
 ## 開発者向け
 
 - [Developer guide](development/README.md)
+- [HTTP API and typed client](development/api.md)
+- [Contributing](development/contributing.md)
 - [Hybrid source of truth and local application server ADR](architecture/0003-hybrid-source-of-truth-and-local-application-server.md)
 - [Selectable database adapters ADR](architecture/0004-selectable-database-adapters.md)
 - [Marp technical report projection ADR](architecture/0005-marp-technical-reports-as-projections.md)
 - [Explainable offline Gantt ADR](architecture/0006-explainable-offline-gantt.md)
+- [Database authority, journal, and outbox ADR](architecture/0007-database-authority-journal-and-outbox.md)
 - [Branching and delivery](development/branching.md)
 - [Testing strategy](development/testing.md)
 - [Developing the GTD workflow](development/gtd-workflow.md)

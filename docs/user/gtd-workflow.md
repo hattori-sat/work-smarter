@@ -286,7 +286,8 @@ private modelを共有しません。
 
 ### Facts
 
-- Markdown/YAML snapshotとappend-only audit eventが正本である。
+- Database structured state/activityが正本、Markdown本文がnarrative正本である。Frontmatter/JSONLは
+  read-only compatibility projectionである。
 - task IDはfull IDだけでなく、workspace内で一意なprefixをCLI/API pathで解決できる。
 - `--json` modeは対話promptを行わず、machine-readable outputだけをstdoutへ返す。
 - waiting、blocker、calendarは同時に存在し得るfacetとして保存される。

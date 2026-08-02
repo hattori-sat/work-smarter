@@ -17,7 +17,7 @@ def test_database_migrations_are_idempotent_and_report_the_current_schema(tmp_pa
     second = database.migrate()
 
     assert first.schema_version == LATEST_SCHEMA_VERSION
-    assert first.applied_versions == [1]
+    assert first.applied_versions == [1, 2]
     assert second.schema_version == LATEST_SCHEMA_VERSION
     assert second.applied_versions == []
     assert database.status().initialized is True

@@ -17,17 +17,17 @@ def test_api_supports_capture_clarify_focus_and_completion(tmp_path: Path) -> No
             "backend": "sqlite",
             "initialized": False,
             "schema_version": 0,
-            "latest_schema_version": 1,
+            "latest_schema_version": 2,
         }
 
         initialized = client.post("/api/workspace/init")
         assert initialized.status_code == 201
         assert initialized.json()["database_backend"] == "sqlite"
-        assert initialized.json()["database_schema_version"] == 1
+        assert initialized.json()["database_schema_version"] == 2
 
         health = client.get("/health")
         assert health.json()["database"]["initialized"] is True
-        assert health.json()["database"]["schema_version"] == 1
+        assert health.json()["database"]["schema_version"] == 2
 
         captured = client.post(
             "/api/gtd/inbox",
@@ -85,7 +85,7 @@ def test_api_startup_adds_the_database_to_an_existing_legacy_workspace(tmp_path:
     with TestClient(create_app(tmp_path)) as client:
         health = client.get("/health")
 
-    assert health.json()["database"]["schema_version"] == 1
+    assert health.json()["database"]["schema_version"] == 2
     assert database_path.is_file()
 
 

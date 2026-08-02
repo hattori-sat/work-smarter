@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from contextlib import asynccontextmanager
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Annotated, Any, Literal
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, FastAPI, Query, Request
 from fastapi.responses import JSONResponse
@@ -15,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from work_smarter import __version__
 from work_smarter.composition import (
     configured_database,
+    configured_structured_store,
 )
 from work_smarter.composition import (
     initialize_workspace as initialize_composed_workspace,
@@ -69,7 +72,13 @@ from work_smarter.project_management.errors import (
     ProjectTransitionError,
 )
 from work_smarter.project_management.service import ProjectManagementService
-from work_smarter.shared.persistence.database import DatabaseBackendRegistry
+from work_smarter.shared.outbox import OutboxDestination, OutboxRunReport, OutboxWorker
+from work_smarter.shared.persistence.database import (
+    DatabaseBackendRegistry,
+    OperationJournalRecord,
+    OutboxMessage,
+    StructuredStateStore,
+)
 
 
 class ApiModel(BaseModel):
@@ -96,6 +105,76 @@ class WorkspaceInitializationResponse(ApiModel):
     initialized: bool
     database_backend: str
     database_schema_version: int
+
+
+class OperationResponse(ApiModel):
+    id: str
+    operation_type: str
+    status: str
+    aggregate_kind: str
+    aggregate_id: str
+    projection_path: str
+    idempotency_key: str
+    last_error: str | None = None
+
+    @classmethod
+    def from_record(cls, record: OperationJournalRecord) -> OperationResponse:
+        return cls(
+            id=record.id,
+            operation_type=record.operation_type,
+            status=record.status,
+            aggregate_kind=record.aggregate_kind,
+            aggregate_id=record.aggregate_id,
+            projection_path=record.projection_path,
+            idempotency_key=record.idempotency_key,
+            last_error=record.last_error,
+        )
+
+
+class OperationRecoveryResponse(ApiModel):
+    pending_before: int = Field(ge=0)
+    pending_after: int = Field(ge=0)
+
+
+class OutboxResponse(ApiModel):
+    id: str
+    operation_id: str
+    destination: str
+    message_type: str
+    payload: dict[str, object]
+    status: str
+    attempt_count: int = Field(ge=0)
+    available_at: str
+    lease_token: str | None = None
+    last_error: str | None = None
+
+    @classmethod
+    def from_message(cls, message: OutboxMessage) -> OutboxResponse:
+        return cls(
+            id=message.id,
+            operation_id=message.operation_id,
+            destination=message.destination,
+            message_type=message.message_type,
+            payload=message.payload,
+            status=message.status,
+            attempt_count=message.attempt_count,
+            available_at=message.available_at,
+            lease_token=message.lease_token,
+            last_error=message.last_error,
+        )
+
+
+class OutboxEnqueueRequest(ApiModel):
+    operation_id: str = Field(min_length=1)
+    destination: str = Field(min_length=1)
+    message_type: str = Field(min_length=1)
+    payload: dict[str, object] = Field(default_factory=dict)
+    message_id: str | None = None
+    available_at: datetime | None = None
+
+
+class OutboxRunRequest(ApiModel):
+    limit: int = Field(default=25, ge=1, le=100)
 
 
 class CaptureRequest(ApiModel):
@@ -660,6 +739,7 @@ def create_app(
     *,
     database_registry: DatabaseBackendRegistry | None = None,
     marp_compiler: MarpCompiler | None = None,
+    outbox_destinations: Mapping[str, OutboxDestination] | None = None,
 ) -> FastAPI:
     """Create an isolated application for a configured local workspace."""
 
@@ -670,6 +750,7 @@ def create_app(
     )
     database = configured_database(configured, database_registry=database_registry)
     presentation_compiler = marp_compiler or MarpCliCompiler.from_environment()
+    delivery_destinations = dict(outbox_destinations or {})
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -686,16 +767,39 @@ def create_app(
     app.state.workspace_path = configured
 
     def get_service(request: Request) -> GtdService:
-        return GtdService(open_composed_workspace(request.app.state.workspace_path))
+        return GtdService(
+            open_composed_workspace(
+                request.app.state.workspace_path,
+                database_registry=database_registry,
+            )
+        )
 
     def get_knowledge_service(request: Request) -> KnowledgeService:
-        return KnowledgeService(open_composed_workspace(request.app.state.workspace_path))
+        return KnowledgeService(
+            open_composed_workspace(
+                request.app.state.workspace_path,
+                database_registry=database_registry,
+            )
+        )
 
     def get_marp_compiler() -> MarpCompiler:
         return presentation_compiler
 
     def get_project_management_service(request: Request) -> ProjectManagementService:
-        return ProjectManagementService(open_composed_workspace(request.app.state.workspace_path))
+        return ProjectManagementService(
+            open_composed_workspace(
+                request.app.state.workspace_path,
+                database_registry=database_registry,
+            )
+        )
+
+    def get_structured_store(request: Request) -> StructuredStateStore:
+        return configured_structured_store(
+            request.app.state.workspace_path,
+            database_registry=database_registry,
+        )
+
+    structured_store_dep = Depends(get_structured_store)
 
     @app.exception_handler(WorkSmarterError)
     async def work_smarter_error(_request: Request, exc: WorkSmarterError) -> JSONResponse:
@@ -751,6 +855,65 @@ def create_app(
             database_backend=database.name,
             database_schema_version=status.schema_version,
         )
+
+    @app.get("/api/system/operations", tags=["system"])
+    def list_operations(
+        limit: Annotated[int, Query(ge=1, le=1000)] = 100,
+        store: StructuredStateStore = structured_store_dep,
+    ) -> list[OperationResponse]:
+        return [OperationResponse.from_record(item) for item in store.list_operations(limit=limit)]
+
+    @app.get("/api/system/operations/{operation_id}", tags=["system"])
+    def get_operation(
+        operation_id: str,
+        store: StructuredStateStore = structured_store_dep,
+    ) -> OperationResponse:
+        return OperationResponse.from_record(store.get_operation(operation_id))
+
+    @app.post("/api/system/operations/recover", tags=["system"])
+    def recover_operations(
+        request: Request,
+        store: StructuredStateStore = structured_store_dep,
+    ) -> OperationRecoveryResponse:
+        pending_before = len(store.pending_operations())
+        open_composed_workspace(
+            request.app.state.workspace_path,
+            database_registry=database_registry,
+        )
+        pending_after = len(store.pending_operations())
+        return OperationRecoveryResponse(
+            pending_before=pending_before,
+            pending_after=pending_after,
+        )
+
+    @app.get("/api/system/outbox", tags=["system"])
+    def list_outbox(
+        limit: Annotated[int, Query(ge=1, le=1000)] = 100,
+        store: StructuredStateStore = structured_store_dep,
+    ) -> list[OutboxResponse]:
+        return [OutboxResponse.from_message(item) for item in store.list_outbox(limit=limit)]
+
+    @app.post("/api/system/outbox", tags=["system"], status_code=201)
+    def enqueue_outbox(
+        payload: OutboxEnqueueRequest,
+        store: StructuredStateStore = structured_store_dep,
+    ) -> OutboxResponse:
+        message = store.enqueue_outbox(
+            message_id=payload.message_id or f"MSG-{uuid4().hex}",
+            operation_id=payload.operation_id,
+            destination=payload.destination,
+            message_type=payload.message_type,
+            payload=payload.payload,
+            available_at=(payload.available_at or datetime.now(UTC)).isoformat(),
+        )
+        return OutboxResponse.from_message(message)
+
+    @app.post("/api/system/outbox/run", tags=["system"])
+    def run_outbox(
+        payload: OutboxRunRequest,
+        store: StructuredStateStore = structured_store_dep,
+    ) -> OutboxRunReport:
+        return OutboxWorker(store, delivery_destinations).run_once(limit=payload.limit)
 
     app.include_router(create_gtd_router(get_service))
     app.include_router(create_knowledge_router(get_knowledge_service, get_marp_compiler))

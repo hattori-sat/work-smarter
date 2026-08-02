@@ -7,6 +7,11 @@ from work_smarter.shared.persistence.database import (
     DatabaseMigrationReport,
     DatabaseSnapshot,
     DatabaseStatus,
+    OperationJournalRecord,
+    OutboxMessage,
+    StructuredEntityState,
+    StructuredStateBackend,
+    StructuredStateStore,
     create_database_backend,
     default_database_registry,
 )
@@ -18,6 +23,11 @@ __all__ = [
     "DatabaseMigrationReport",
     "DatabaseSnapshot",
     "DatabaseStatus",
+    "OperationJournalRecord",
+    "OutboxMessage",
+    "StructuredEntityState",
+    "StructuredStateBackend",
+    "StructuredStateStore",
     "create_database_backend",
     "default_database_registry",
 ]

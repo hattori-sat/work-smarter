@@ -64,6 +64,33 @@ def test_backup_restore_round_trip_preserves_documents_and_events(tmp_path: Path
     assert reopened.event_store.read_all()
 
 
+def test_backup_restore_preserves_database_owned_state_journal_and_outbox(
+    tmp_path: Path,
+) -> None:
+    source = initialize_workspace(tmp_path / "source-structured")
+    captured = GtdService(source).capture("Database-owned backup state")
+    assert source.structured_store is not None
+    source.structured_store.enqueue_outbox(
+        message_id="MSG-BACKUP",
+        operation_id="SYNC-BACKUP",
+        destination="fake",
+        message_type="entity.changed",
+        payload={"id": captured.id},
+        available_at="2026-08-03T00:00:00+00:00",
+    )
+    archive = tmp_path / "structured.ws.zip"
+    WorkspaceOperations(source).backup(archive)
+
+    restored_root = tmp_path / "restored-structured"
+    WorkspaceOperations.restore(archive, restored_root)
+    restored = open_workspace(restored_root)
+
+    assert [item.id for item in GtdService(restored).list_inbox()] == [captured.id]
+    assert restored.structured_store is not None
+    assert restored.structured_store.list_operations()[0].status == "completed"
+    assert restored.structured_store.list_outbox()[0].operation_id == "SYNC-BACKUP"
+
+
 def test_backup_uses_a_consistent_sqlite_snapshot_without_wal_sidecars(tmp_path: Path) -> None:
     workspace = initialize_workspace(tmp_path / "source")
     database = SQLiteDatabaseBackend(workspace.root, DatabaseConfiguration())

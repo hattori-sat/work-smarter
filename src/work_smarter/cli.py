@@ -4,14 +4,20 @@ from __future__ import annotations
 
 import json
 import sys
-from dataclasses import dataclass
-from datetime import date
+from dataclasses import asdict, dataclass, is_dataclass
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Annotated, Any
+from uuid import uuid4
 
 import typer
 
-from work_smarter.composition import initialize_workspace, open_workspace
+from work_smarter.api import OutboxEnqueueRequest
+from work_smarter.composition import (
+    configured_structured_store,
+    initialize_workspace,
+    open_workspace,
+)
 from work_smarter.confluence.cli import app as confluence_app
 from work_smarter.errors import WorkSmarterError
 from work_smarter.gtd.cli import app as gtd_app
@@ -32,8 +38,10 @@ from work_smarter.gtd.models import (
 )
 from work_smarter.gtd.service import GtdService
 from work_smarter.gtd.tui import run_tui
+from work_smarter.http_client import WorkSmarterHttpClient, validate_loopback_server
 from work_smarter.knowledge.cli import app as knowledge_app
 from work_smarter.project_management.cli import app as project_management_app
+from work_smarter.shared.outbox import OutboxWorker
 from work_smarter.workspace_ops import WorkspaceOperations
 
 app = typer.Typer(
@@ -59,6 +67,18 @@ server_app = typer.Typer(
     help="Run the local FastAPI application server.",
     no_args_is_help=True,
 )
+system_app = typer.Typer(
+    help="Inspect and recover application infrastructure.",
+    no_args_is_help=True,
+)
+operation_app = typer.Typer(
+    help="Inspect durable operation journal entries.",
+    no_args_is_help=True,
+)
+outbox_app = typer.Typer(
+    help="Inspect and deliver transactional outbox messages.",
+    no_args_is_help=True,
+)
 app.add_typer(task_app, name="task")
 app.add_typer(review_app, name="review")
 app.add_typer(gtd_app, name="gtd")
@@ -68,6 +88,9 @@ app.add_typer(project_management_app, name="project")
 app.add_typer(confluence_app, name="confluence")
 app.add_typer(workspace_app, name="workspace")
 app.add_typer(server_app, name="server")
+app.add_typer(system_app, name="system")
+system_app.add_typer(operation_app, name="operation")
+system_app.add_typer(outbox_app, name="outbox")
 
 
 @app.command("tui")
@@ -82,6 +105,140 @@ def overview(ctx: typer.Context) -> None:
 
     report = WorkspaceOperations(open_workspace(_state(ctx).workspace)).overview()
     _emit(ctx, report)
+
+
+def _http_client(ctx: typer.Context) -> WorkSmarterHttpClient | None:
+    server_url = _state(ctx).server_url
+    return WorkSmarterHttpClient(server_url) if server_url else None
+
+
+@operation_app.command("list")
+def operation_list(
+    ctx: typer.Context,
+    limit: Annotated[int, typer.Option(min=1, max=1000)] = 100,
+) -> None:
+    """List recent durable operations newest first."""
+
+    client = _http_client(ctx)
+    if client is not None:
+        with client:
+            _emit(ctx, client.list_operations(limit=limit))
+        return
+    store = configured_structured_store(_state(ctx).workspace)
+    _emit(ctx, store.list_operations(limit=limit))
+
+
+@operation_app.command("show")
+def operation_show(
+    ctx: typer.Context,
+    operation_id: Annotated[str, typer.Argument(help="Full operation ID.")],
+) -> None:
+    """Show one durable operation and its recovery state."""
+
+    client = _http_client(ctx)
+    if client is not None:
+        with client:
+            _emit(ctx, client.get_operation(operation_id))
+        return
+    store = configured_structured_store(_state(ctx).workspace)
+    _emit(ctx, store.get_operation(operation_id))
+
+
+@operation_app.command("recover")
+def operation_recover(ctx: typer.Context) -> None:
+    """Resolve pending file/database intents deterministically."""
+
+    client = _http_client(ctx)
+    if client is not None:
+        with client:
+            _emit(ctx, client.recover_operations())
+        return
+    store = configured_structured_store(_state(ctx).workspace)
+    before = len(store.pending_operations())
+    open_workspace(_state(ctx).workspace)
+    after = len(store.pending_operations())
+    _emit(ctx, {"pending_before": before, "pending_after": after})
+
+
+@outbox_app.command("list")
+def outbox_list(
+    ctx: typer.Context,
+    limit: Annotated[int, typer.Option(min=1, max=1000)] = 100,
+) -> None:
+    """List recent external-delivery messages."""
+
+    client = _http_client(ctx)
+    if client is not None:
+        with client:
+            _emit(ctx, client.list_outbox(limit=limit))
+        return
+    store = configured_structured_store(_state(ctx).workspace)
+    _emit(ctx, store.list_outbox(limit=limit))
+
+
+@outbox_app.command("enqueue")
+def outbox_enqueue(
+    ctx: typer.Context,
+    operation_id: Annotated[str, typer.Argument(help="Stable provider idempotency key.")],
+    destination: Annotated[str, typer.Option(help="Installed destination name.")],
+    message_type: Annotated[str, typer.Option("--type", help="Stable message contract.")],
+    payload: Annotated[str, typer.Option(help="JSON object payload.")] = "{}",
+    message_id: Annotated[str | None, typer.Option()] = None,
+    available_at: Annotated[str | None, typer.Option()] = None,
+) -> None:
+    """Enqueue one idempotent provider delivery."""
+
+    try:
+        decoded = json.loads(payload)
+    except json.JSONDecodeError as exc:
+        raise typer.BadParameter("must be a JSON object", param_hint="--payload") from exc
+    if not isinstance(decoded, dict):
+        raise typer.BadParameter("must be a JSON object", param_hint="--payload")
+    try:
+        available = datetime.fromisoformat(available_at) if available_at else datetime.now(UTC)
+    except ValueError as exc:
+        raise typer.BadParameter("must be ISO 8601", param_hint="--available-at") from exc
+    request = OutboxEnqueueRequest(
+        operation_id=operation_id,
+        destination=destination,
+        message_type=message_type,
+        payload=decoded,
+        message_id=message_id,
+        available_at=available,
+    )
+    client = _http_client(ctx)
+    if client is not None:
+        with client:
+            _emit(ctx, client.enqueue_outbox(request))
+        return
+    store = configured_structured_store(_state(ctx).workspace)
+    message = store.enqueue_outbox(
+        message_id=request.message_id or f"MSG-{uuid4().hex}",
+        operation_id=request.operation_id,
+        destination=request.destination,
+        message_type=request.message_type,
+        payload=request.payload,
+        available_at=request.available_at.isoformat()
+        if request.available_at
+        else available.isoformat(),
+    )
+    _emit(ctx, message)
+
+
+@outbox_app.command("run")
+def outbox_run(
+    ctx: typer.Context,
+    limit: Annotated[int, typer.Option(min=1, max=100)] = 25,
+) -> None:
+    """Run one bounded delivery batch; missing destinations remain retryable."""
+
+    client = _http_client(ctx)
+    if client is not None:
+        with client:
+            _emit(ctx, client.run_outbox(limit=limit))
+        return
+    store = configured_structured_store(_state(ctx).workspace)
+    _emit(ctx, OutboxWorker(store, {}).run_once(limit=limit))
 
 
 @workspace_app.command("export")
@@ -121,6 +278,7 @@ def workspace_migrate(ctx: typer.Context) -> None:
 class CliState:
     workspace: Path
     json_output: bool = False
+    server_url: str | None = None
 
 
 @app.callback()
@@ -139,10 +297,22 @@ def main(
         bool,
         typer.Option("--json", help="Emit machine-readable JSON."),
     ] = False,
+    server_url: Annotated[
+        str | None,
+        typer.Option(
+            "--server-url",
+            envvar="WORK_SMARTER_SERVER_URL",
+            help="Use the loopback FastAPI server for supported canonical commands.",
+        ),
+    ] = None,
 ) -> None:
     """Select a workspace shared by every command."""
 
-    ctx.obj = CliState(workspace=workspace or Path.cwd(), json_output=json_output)
+    ctx.obj = CliState(
+        workspace=workspace or Path.cwd(),
+        json_output=json_output,
+        server_url=validate_loopback_server(server_url) if server_url else None,
+    )
 
 
 def _state(ctx: typer.Context) -> CliState:
@@ -158,7 +328,14 @@ def _emit(ctx: typer.Context, value: Any) -> None:
         if hasattr(value, "model_dump_json"):
             typer.echo(value.model_dump_json(indent=2))
         else:
-            typer.echo(json.dumps(value, ensure_ascii=False, indent=2, default=str))
+            typer.echo(
+                json.dumps(
+                    value,
+                    ensure_ascii=False,
+                    indent=2,
+                    default=lambda item: asdict(item) if is_dataclass(item) else str(item),
+                )
+            )
         return
     if hasattr(value, "id") and hasattr(value, "title"):
         typer.echo(f"{value.id}  {value.title}")

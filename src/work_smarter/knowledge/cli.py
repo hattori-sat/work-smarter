@@ -30,10 +30,15 @@ app = typer.Typer(
     help="Capture, connect, search, and maintain Markdown knowledge notes.",
     no_args_is_help=True,
 )
+note_app = typer.Typer(
+    help="Create, inspect, connect, and maintain knowledge notes.",
+    no_args_is_help=True,
+)
 presentation_app = typer.Typer(
     help="Render knowledge as presentation projections.",
     no_args_is_help=True,
 )
+app.add_typer(note_app, name="note")
 app.add_typer(presentation_app, name="presentation")
 
 
@@ -563,6 +568,17 @@ def doctor(ctx: typer.Context) -> None:
         typer.echo("Counts: " + ", ".join(f"{key}={value}" for key, value in report.counts.items()))
     if not report.valid:
         raise typer.Exit(1)
+
+
+# Canonical domain/resource/operation tree. Historical flat commands remain aliases.
+note_app.command("create")(add_note)
+note_app.command("show")(show_note)
+note_app.command("list")(list_notes)
+note_app.command("search")(search_notes)
+note_app.command("update")(update_note)
+note_app.command("link")(link_note)
+note_app.command("backlinks")(show_backlinks)
+note_app.command("promote")(promote_record)
 
 
 __all__ = ["app"]

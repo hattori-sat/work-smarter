@@ -42,8 +42,8 @@ adapterごとの実装量は増えるが、driverとSQLをinfrastructureへ閉�
 4. 外部adapterはPython entry point `work_smarter.database_backends`へfactoryを登録できる。
 5. Backup manifestはbackend名とsnapshot memberを記録し、restoreは同じadapterで検証する。
 6. Provider credentialをworkspace configへ保存しない。configはbackend名とnon-secret locationだけを持つ。
-7. Domain CRUDでは汎用`Database.execute` Portを公開しない。`ActionRepository`、`ActivityEventRepository`
-   等のuse-case別Portを定義し、各adapterがSQL、ODBC、DAO等で実装する。
+7. Domain CRUDでは汎用`Database.execute` Portを公開しない。V1はregistered Pydantic kindを扱う
+   `StructuredStateStore`、activity、operation、outboxのuse-case Portをadapterが実装する。
 8. SQLを使うadapterはstatic statementとparameter bindingの安全契約を守る。Access adapterも文字列連結で
    queryを生成しない。
 9. Backend変更時のdata migrationは明示的なexport/verify/import operationとし、config変更だけで既存dataを
@@ -72,4 +72,4 @@ database:
 - Access adapterのdriver、ODBC/DAO選択、macOS/Linux上の利用可否はUNKNOWN。
 - SQLiteからAccessへのdata migration formatと型変換規則はUNKNOWN。
 - Accessのtransaction、concurrent writer、online snapshot能力はUNKNOWN。
-- Domain repository Portの最終粒度は最初のDomain DB移行までUNKNOWN。
+- Domain別secondary index/read modelの必要性は利用規模の実測前のためUNKNOWN。

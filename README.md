@@ -3,8 +3,8 @@
 構造化情報を選択可能なDatabase backendへ段階移行し、narrative本文をMarkdownで扱う、
 エンジニア個人向けのPersonal Engineering Workbenchです。
 
-現在の `0.1.0` はGTD workflow、独立Knowledge、managed project、Confluence publishingを
-実装しています。Target ArchitectureへのDatabase移行はdomain単位で進行中です。
+現在の `1.0.0` はGTD workflow、独立Knowledge、managed project、対話的Gantt、Confluence publishing、
+Database authority、crash recovery、transactional outboxを実装しています。
 
 ## いまできること
 
@@ -18,13 +18,14 @@
 - WIPを常に1件へ制限し、明示的なswitchだけを許可
 - waiting / blocked / scheduledからreadyへの復帰
 - 日次status、週次review、workspace doctor、実績metrics
-- 既存domainの1 entity = 1 Markdown、YAML frontmatter、append-only JSONL監査ログ
-- Database Portとadapter registry、SQLite migration、activity event、integration outboxの基盤
+- 1 entity = 1 Markdown narrative、Database-owned structured state、read-only frontmatter projection
+- Database Portとadapter registry、SQLite migration、operation journal、activity event、leased outbox worker
 - 1 Knowledge note = 1 Markdown、用途別template、tag、alias、source
 - workspace entityへの明示的link、導出backlink、title/tag/body/alias検索
 - GTD taskやInbox itemなど既存recordからKnowledgeへのidempotentなpromotion
 - orphan・broken・duplicate・ambiguous linkを検査するKnowledge doctor
-- CLIと、VS Code clientから利用できる型付きHTTP API
+- Working Calendar、4 dependency type、CPM explanation、baseline付きoffline interactive Gantt
+- CLI、typed loopback HTTP client、VS Code clientから利用できる型付きHTTP API
 
 ## セットアップ
 
@@ -32,7 +33,7 @@ Python 3.12以降が必要です。現在の対応OSはmacOS/Linuxです。
 
 ```bash
 python3.12 -m venv .venv
-.venv/bin/python -m pip install '.[dev]'
+.venv/bin/python -m pip install -r requirements-dev.txt
 source .venv/bin/activate
 ```
 
@@ -160,13 +161,14 @@ my-workspace/
 ├── templates/knowledge/   note type別bodyとMarp visual template
 └── .work-smarter/
     ├── config.yml
-    ├── events.ndjson      timer・遷移・reviewの監査履歴
+    ├── work-smarter.db    structured state・activity・journal・outboxの正本
+    ├── events.ndjson      互換audit projection
     └── workspace.lock
 ```
 
-taskの状態・関連・日付などはfrontmatter、意図・メモ・結果は本文です。直接編集も正式な使い方ですが、
-編集後は `ws doctor` でworkspace/GTDを、`ws knowledge doctor`でKnowledge graphを検証してください。詳細は
-[workspace format](docs/reference/workspace-format.md)にあります。
+Taskの状態・関連・日付などはDatabase、意図・メモ・結果はMarkdown本文が正本です。Frontmatterはread-only
+projectionであり、直接変更してもstateへ反映されません。本文の直接編集は正式対応です。詳細は
+[workspace guide](docs/user/workspace.md)と[workspace format](docs/reference/workspace-format.md)にあります。
 
 `templates/gtd/` と `templates/knowledge/` のbody template、および
 `templates/knowledge/presentations/scientific.css`は自由に変更できます。次回 `init` でも既存fileは
@@ -183,9 +185,11 @@ ws server start --host 127.0.0.1 --port 8765
 - health: `GET /health`
 - GTD: `/api/gtd/*`
 - Knowledge: `/api/knowledge/*`
+- Managed Project: `/api/projects/*`
+- Operation journal / outbox: `/api/system/*`
 
-APIとCLIは同じapplication serviceを呼ぶため、VS Code extensionが独自に状態遷移を再実装する必要は
-ありません。APIは初期状態でlocalhostにだけbindします。
+APIとCLIは同じapplication contractを呼びます。System commandは
+`--server-url http://127.0.0.1:8765`でtyped HTTP clientへ切替できます。APIはlocalhostにだけbindします。
 
 ## GTD projectとproject managementは別物
 
@@ -210,11 +214,10 @@ storageはfeatureが登録するentity codecだけを知り、GTD modelをimport
 
 ## 現在の非対応範囲
 
-- 既存domainのDatabase source-of-truth移行
 - Jira連携、User Story Mapping
-- Web UI、file watcher、outbox worker
+- Web UI、file watcher
 - VS Code専用UI/shortcut（integrated terminalとAPIは利用可能）
-- multi-user権限管理、remote server運用
+- multi-user権限管理、remote authentication/server運用、distributed outbox worker
 - Windows（local file lockが現時点ではPOSIX実装）
 
 これらは未実装であり、GTD MVPの一部として仮実装してはいません。

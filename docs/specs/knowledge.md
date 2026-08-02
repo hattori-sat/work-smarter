@@ -6,24 +6,24 @@
 
 ## Outcome
 
-GTDの実行状態と混ぜずに、再利用可能な情報をstrictなMarkdown entityとして保存し、type、tag、alias、
-source、stable-ID link、backlink、検索から再発見できるようにする。
+GTDの実行状態と混ぜずに、再利用可能な情報のstructured stateをDatabase、narrativeをMarkdownとして保存し、
+type、tag、alias、source、stable-ID link、backlink、検索から再発見できるようにする。
 
 ## Success criteria
 
 1. Knowledgeが独自のmodel、repository codec、service、template、CLI、HTTP contractを持つ。
-2. 1 noteを1 Markdownとして保存し、VS Codeで安全に直接編集できる。
+2. 1 noteを1 Markdown narrativeとして保存し、VS Codeで本文を安全に直接編集できる。
 3. note、decision、how-to、reference、meeting-note、technical-reportを用途別templateから作れる。
 4. tagとaliasを正規化し、title/tag/body/aliasを検索できる。
 5. workspace entityへのoutbound linkを検証し、backlinkを導出できる。
 6. generic workspace recordをprivate feature modelへの依存なしでKnowledgeへpromoteできる。
-7. hand editで生じるorphan、broken、duplicate、ambiguous linkをdoctorで発見できる。
+7. Imported legacy dataやpublic updateで生じるorphan、broken、duplicate、ambiguous linkをdoctorで発見できる。
 8. write invariantはworkspace lock内でserviceが適用し、成功eventをappend-only logへ残す。
 
 ## Facts
 
-- Knowledge noteの正本は`knowledge/notes/<id>.md`である。
-- frontmatter schemaは`KnowledgeNote` schema version 1で、unknown fieldを拒否する。
+- Knowledge noteのstructured正本はDatabase、narrative正本は`knowledge/notes/<id>.md`本文である。
+- Database payload/frontmatter projectionは`KnowledgeNote` schema version 1で、unknown fieldを拒否する。
 - 本文は任意のUTF-8 Markdownである。
 - Knowledge packageをimportしてもGTD packageをimportしない。
 - cross-feature relationはstable IDとgeneric `EntityRecord` public attributesだけを使う。
@@ -47,7 +47,8 @@ source、stable-ID link、backlink、検索から再発見できるようにす�
 - Hypothesis: technical-report templateの結論先行sectionが、発表資料作成時の並べ替えを減らす。
 - UNKNOWN: note数が何件になった時点で検索indexが必要になるか。
 - UNKNOWN: semantic searchとautomatic link suggestionが、誤関連の確認costを上回る価値を持つか。
-- UNKNOWN: Markdown writeとevent appendの間でprocessが停止した場合の一般的なrecovery/outbox方式。
+- Fact: Markdown projectionとDatabase commitのprocess crashはoperation journalで回復し、外部deliveryは
+  leased transactional outboxでretryする。
 
 ## Considered implementation paths
 

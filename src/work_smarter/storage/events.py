@@ -5,11 +5,14 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from work_smarter.shared.persistence.database import StructuredStateStore
 
 
 def utc_now() -> datetime:
@@ -59,3 +62,28 @@ class EventStore:
                 except (ValueError, json.JSONDecodeError) as exc:
                     raise ValueError(f"Invalid event at {self.path}:{line_number}: {exc}") from exc
         return events
+
+
+class DatabaseEventStore(EventStore):
+    """Database-authoritative event history with a best-effort JSONL projection."""
+
+    def __init__(self, path: Path, structured_store: StructuredStateStore):
+        super().__init__(path)
+        self.structured_store = structured_store
+
+    def append(self, event: Event) -> Event:
+        stored = self.structured_store.append_activity_event(
+            event.model_dump(mode="json", exclude_none=True)
+        )
+        authoritative = Event.model_validate(stored)
+        with suppress(OSError):
+            super().append(authoritative)
+            # The database commit is authoritative; a later export can rebuild projections.
+        return authoritative
+
+    def read_all(self) -> list[Event]:
+        return [
+            Event.model_validate(event)
+            for event in self.structured_store.list_activity_events()
+            if not str(event.get("type", "")).startswith("workspace.entity.")
+        ]

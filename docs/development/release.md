@@ -3,7 +3,8 @@
 ## Required checks
 
 1. `ruff check`、`ruff format --check`、全`pytest`を実行する。
-2. clean checkout相当の一時環境でwheelをbuild・installし、`ws --help`を実行する。
+2. `.venv/bin/python scripts/release_smoke.py`で一時venvへwheelとruntime依存をinstallし、canonical
+   CLIとjournalを実行する。
 3. secret、実在email、private key、token、absolute home pathをtracked filesから検索する。
 4. `ws workspace export`でbackupを作り、空のworkspaceへimportしてdoctorを実行する。
 5. `TASK.md`、user manual、developer manual、`CHANGELOG.md`を更新する。
@@ -14,5 +15,8 @@
 
 - Facts: individual document writes and configuration writes are atomic; event append and WIP lock are
   process-safe on POSIX. Corrupt documents, unsafe archive paths, and concurrent starts have tests.
-- UNKNOWN: document writeとevent appendをまたぐ一般的なmulti-file crash recovery/outboxは未実装。
-- Inference: 上記が解決するまで、`main`へのv1 release mergeではなくintegration PRとして扱う。
+- Facts: file/Database境界はoperation journal、external deliveryはleased transactional outboxで回復する。
+  Process-style crash、正常例外、lease競合、破損JSONL、backup/restoreのacceptance testがある。
+- UNKNOWN: remote authentication、multi-user conflict、distributed workerはV1範囲外である。
+
+Release evidenceは[V1 release checklist](v1-release-checklist.md)へ実行日、test数、commitを記録する。
