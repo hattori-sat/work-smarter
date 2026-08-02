@@ -54,12 +54,17 @@ workspace_app = typer.Typer(
     help="Export, import, and migrate a complete workspace.",
     no_args_is_help=True,
 )
+server_app = typer.Typer(
+    help="Run the local FastAPI application server.",
+    no_args_is_help=True,
+)
 app.add_typer(task_app, name="task")
 app.add_typer(review_app, name="review")
 app.add_typer(knowledge_app, name="knowledge")
 app.add_typer(project_management_app, name="pm")
 app.add_typer(confluence_app, name="confluence")
 app.add_typer(workspace_app, name="workspace")
+app.add_typer(server_app, name="server")
 
 
 @app.command("tui")
@@ -1226,19 +1231,45 @@ def metrics(ctx: typer.Context) -> None:
         typer.echo(f"Actual / estimate: {report.average_estimate_ratio:.2f}")
 
 
-@app.command()
-def serve(
-    ctx: typer.Context,
-    host: Annotated[str, typer.Option()] = "127.0.0.1",
-    port: Annotated[int, typer.Option(min=1, max=65535)] = 8765,
-) -> None:
-    """Serve the local API used by the future VS Code extension."""
+def _run_server(ctx: typer.Context, *, host: str, port: int) -> None:
+    if host != "127.0.0.1":
+        detail = "HOST must be 127.0.0.1; remote binding requires authentication"
+        if _state(ctx).json_output:
+            typer.echo(
+                json.dumps({"error": "InvalidHostError", "detail": detail}),
+                err=True,
+            )
+        else:
+            typer.echo(f"Error: {detail}", err=True)
+        raise typer.Exit(2)
 
     import uvicorn
 
     from work_smarter.api import create_app
 
     uvicorn.run(create_app(_state(ctx).workspace), host=host, port=port)
+
+
+@server_app.command("start")
+def server_start(
+    ctx: typer.Context,
+    host: Annotated[str, typer.Option()] = "127.0.0.1",
+    port: Annotated[int, typer.Option(min=1, max=65535)] = 8765,
+) -> None:
+    """Start the local FastAPI server on a loopback interface."""
+
+    _run_server(ctx, host=host, port=port)
+
+
+@app.command(hidden=True)
+def serve(
+    ctx: typer.Context,
+    host: Annotated[str, typer.Option()] = "127.0.0.1",
+    port: Annotated[int, typer.Option(min=1, max=65535)] = 8765,
+) -> None:
+    """Compatibility alias for `ws server start`."""
+
+    _run_server(ctx, host=host, port=port)
 
 
 def run() -> None:

@@ -5,7 +5,7 @@
 
 ## Outcome
 
-GTD、project management、User Story Mapping、TBP、publishingを、同じworkspaceに配置できるが
+GTD、project management、User Story Mapping、publishingを、同じworkspaceに配置できるが
 互いのstate machineへ依存しないfeatureとして合成する。
 
 ## Facts
@@ -42,8 +42,11 @@ built-in featureが主対象であり、第三者plugin compatibilityはまだ�
 
 ## Events
 
-`.work-smarter/events.ndjson` は0.1ではappend-onlyのローカル監査履歴である。event typeは
+`.work-smarter/events.ndjson` はlegacy domainではappend-onlyのローカル監査履歴である。event typeは
 `gtd.task.started` のようにnamespace化し、envelopeに `schema_version` を持たせる。
+
+Target ArchitectureではDatabase activity eventとtransactional outboxへdomain単位で移行する。
+正本の切替規則は[ADR 0003](0003-hybrid-source-of-truth-and-local-application-server.md)に従う。
 
 これはまだ信頼できるfeature間message busではない。将来subscriberを動かす場合は、Markdown更新と
 event発行の間でcrashしても欠落しないtransactional outbox、再送、idempotencyを別ADRで決める。

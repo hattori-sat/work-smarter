@@ -1,10 +1,10 @@
 # Work Smarter
 
-Markdownを正本にし、事務作業をシステムへ押しつける、エンジニア個人向けのGTD・Knowledge
-managementツールです。
+構造化情報をSQLiteへ段階移行し、narrative本文をMarkdownで扱う、
+エンジニア個人向けのPersonal Engineering Workbenchです。
 
 現在の `0.1.0` はGTD workflow、独立Knowledge、managed project、Confluence publishingを
-実装しています。User Story MappingとTBPは、既存featureとは別に追加できる境界だけを用意しています。
+実装しています。Target ArchitectureへのDatabase移行はdomain単位で進行中です。
 
 ## いまできること
 
@@ -18,7 +18,8 @@ managementツールです。
 - WIPを常に1件へ制限し、明示的なswitchだけを許可
 - waiting / blocked / scheduledからreadyへの復帰
 - 日次status、週次review、workspace doctor、実績metrics
-- 1 task = 1 Markdown、YAML frontmatter、append-only JSONL監査ログ
+- 既存domainの1 entity = 1 Markdown、YAML frontmatter、append-only JSONL監査ログ
+- SQLite migration、append-only activity event、integration outboxの基盤
 - 1 Knowledge note = 1 Markdown、用途別template、tag、alias、source
 - workspace entityへの明示的link、導出backlink、title/tag/body/alias検索
 - GTD taskやInbox itemなど既存recordからKnowledgeへのidempotentなpromotion
@@ -173,7 +174,7 @@ taskの状態・関連・日付などはfrontmatter、意図・メモ・結果�
 ## ローカルAPI
 
 ```bash
-ws serve --host 127.0.0.1 --port 8765
+ws server start --host 127.0.0.1 --port 8765
 ```
 
 - OpenAPI: `http://127.0.0.1:8765/openapi.json`
@@ -191,11 +192,12 @@ GTD projectは「複数actionが必要な望ましいoutcome」です。WBS、�
 review gateを持つmanaged projectではありません。後者は
 `work_smarter.project_management` featureへ実装し、GTD state machineには混ぜません。
 
-同じ方針でKnowledgeは`work_smarter.knowledge`として既に分離されています。User Story Mapping、
-issue-driven TBP、Confluence publishingも独立featureにします。
+同じ方針でKnowledgeとConfluence publishingも独立境界に分離されています。将来追加するfeatureも
+private domain modelを共有しません。
 storageはfeatureが登録するentity codecだけを知り、GTD modelをimportしません。設計判断は
 [ADR 0001](docs/architecture/0001-text-first-modular-monolith.md)と
-[ADR 0002](docs/architecture/0002-feature-contract.md)にあります。
+[ADR 0002](docs/architecture/0002-feature-contract.md)、
+[ADR 0003](docs/architecture/0003-hybrid-source-of-truth-and-local-application-server.md)にあります。
 
 ## 開発と検証
 
@@ -207,9 +209,9 @@ storageはfeatureが登録するentity codecだけを知り、GTD modelをimport
 
 ## 現在の非対応範囲
 
-- managed project、Gantt、QCD/EVM、system engineering document set
-- User Story Mapping、TBP
-- Confluence Cloud push/pull
+- 既存domainのDatabase source-of-truth移行
+- Jira連携、User Story Mapping
+- Web UI、file watcher、outbox worker
 - VS Code専用UI/shortcut（integrated terminalとAPIは利用可能）
 - multi-user権限管理、remote server運用
 - Windows（local file lockが現時点ではPOSIX実装）

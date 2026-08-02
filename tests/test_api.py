@@ -5,6 +5,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from work_smarter.api import create_app
+from work_smarter.storage.workspace import Workspace
 
 
 def test_api_supports_capture_clarify_focus_and_completion(tmp_path: Path) -> None:
@@ -12,9 +13,19 @@ def test_api_supports_capture_clarify_focus_and_completion(tmp_path: Path) -> No
         health = client.get("/health")
         assert health.status_code == 200
         assert health.json()["initialized"] is False
+        assert health.json()["database"] == {
+            "initialized": False,
+            "schema_version": 0,
+            "latest_schema_version": 1,
+        }
 
         initialized = client.post("/api/workspace/init")
         assert initialized.status_code == 201
+        assert initialized.json()["database_schema_version"] == 1
+
+        health = client.get("/health")
+        assert health.json()["database"]["initialized"] is True
+        assert health.json()["database"]["schema_version"] == 1
 
         captured = client.post(
             "/api/gtd/inbox",
@@ -62,6 +73,18 @@ def test_api_supports_capture_clarify_focus_and_completion(tmp_path: Path) -> No
         metrics = client.get("/api/gtd/metrics")
         assert metrics.status_code == 200
         assert metrics.json()["completed_total"] == 1
+
+
+def test_api_startup_adds_the_database_to_an_existing_legacy_workspace(tmp_path: Path) -> None:
+    Workspace.initialize(tmp_path)
+    database_path = tmp_path / ".work-smarter" / "work-smarter.db"
+    assert not database_path.exists()
+
+    with TestClient(create_app(tmp_path)) as client:
+        health = client.get("/health")
+
+    assert health.json()["database"]["schema_version"] == 1
+    assert database_path.is_file()
 
 
 def test_api_maps_domain_errors_to_conflict(tmp_path: Path) -> None:

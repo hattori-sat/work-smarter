@@ -125,6 +125,7 @@ def test_fresh_workspace_config_matches_initialized_features(tmp_path: Path) -> 
     assert (workspace.root / "templates/gtd/task.md").is_file()
     assert (workspace.root / "templates/knowledge/note.md").is_file()
     assert (workspace.root / "templates/project-management/managed-project.md").is_file()
+    assert (workspace.state_dir / "work-smarter.db").is_file()
 
 
 def test_disabled_knowledge_kind_is_not_guessed_from_disk(tmp_path: Path) -> None:
