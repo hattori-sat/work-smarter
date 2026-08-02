@@ -200,6 +200,11 @@ Follow-up slices:
 - [x] restore展開前のSQLite integrity/schema検証
 - [x] parameter bindingでSQL injection payloadをdataとして保存
 - [x] dynamic SQL interpolationを拒否するarchitecture test
+- [x] provider-neutral Database Portとbackend registry
+- [x] workspace設定によるbackend/location選択
+- [x] backend metadata付きbackup/restore contract
+- [x] fake non-SQLite adapterによる初期化・FastAPI・backup/restore acceptance
+- [x] SQLite driver importのadapter内隔離
 - [x] user/developer documentation
 
 ## Definition of Done for every slice

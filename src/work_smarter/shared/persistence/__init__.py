@@ -1,15 +1,23 @@
-"""Relational persistence shared by application modules."""
+"""Provider-neutral relational persistence contracts."""
 
 from work_smarter.shared.persistence.database import (
-    LATEST_SCHEMA_VERSION,
-    ApplicationDatabase,
+    DatabaseBackend,
+    DatabaseBackendRegistry,
+    DatabaseConfiguration,
     DatabaseMigrationReport,
+    DatabaseSnapshot,
     DatabaseStatus,
+    create_database_backend,
+    default_database_registry,
 )
 
 __all__ = [
-    "LATEST_SCHEMA_VERSION",
-    "ApplicationDatabase",
+    "DatabaseBackend",
+    "DatabaseBackendRegistry",
+    "DatabaseConfiguration",
     "DatabaseMigrationReport",
+    "DatabaseSnapshot",
     "DatabaseStatus",
+    "create_database_backend",
+    "default_database_registry",
 ]

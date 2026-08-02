@@ -2,12 +2,29 @@
 
 ## Outcome
 
-SQLite accessを`work_smarter.shared.persistence`へ隔離し、online backup、migration、SQL injection
-防止を同じinfrastructure boundaryで管理します。
+Database lifecycleをprovider-neutral Portへ分離し、SQLite等のadapterごとにonline backup、migration、
+SQL injection防止をinfrastructure boundaryで管理します。
+
+## Port and adapter selection
+
+Workspaceは次の設定でbackendを選択します。
+
+```yaml
+database:
+  backend: sqlite
+  location: .work-smarter/work-smarter.db
+```
+
+- `DatabaseBackend`はstatus、migration、snapshot、verificationだけを公開します。
+- `DatabaseBackendRegistry`はbuilt-in SQLiteとentry point `work_smarter.database_backends`を合成します。
+- Domain repositoryはこのPortへSQLを渡しません。Use case別Repository Portを別途定義します。
+- `location`はcredentialを含まないlocal resourceだけに使用します。Password/tokenはenvironmentまたは
+  OS credential storeからadapterが取得します。
+- Backend設定の変更は既存dataを移行しません。明示的なmigration operationが必要です。
 
 ## Facts
 
-- Application databaseはworkspace内の`.work-smarter/work-smarter.db`です。
+- 初期adapterはworkspace内の`.work-smarter/work-smarter.db`を使うSQLiteです。
 - Domain moduleは`sqlite3`をimportしません。
 - BackupはSQLite backup APIでtransactionally consistentなsnapshotを作ります。
 - Restoreはarchive展開前に`PRAGMA quick_check`とmigration metadataを検証します。
@@ -31,6 +48,7 @@ SQLite accessを`work_smarter.shared.persistence`へ隔離し、online backup、
 4. User inputを`PRAGMA`、`executescript`、migration DDLへ渡しません。
 5. APIやCLIへ任意SQL実行機能を公開しません。
 6. `tests/test_sql_safety.py`はruntime interpolationまたは変数化されたstatementを拒否します。
+7. SQLを利用する将来のAccess/ODBC adapterにも同じparameter binding contractを適用します。
 
 ## Inferences
 
@@ -42,3 +60,4 @@ SQLite accessを`work_smarter.shared.persistence`へ隔離し、online backup、
 
 - Domain repository追加後のquery performanceとindex構成は実測前のためUNKNOWNです。
 - Database schema migration失敗時の自動rollback/restore policyはUNKNOWNです。
+- Microsoft Access adapterのdriver、対応OS、transaction/snapshot能力はUNKNOWNです。

@@ -6,14 +6,12 @@ from pathlib import Path
 import pytest
 
 from work_smarter.errors import InvalidDocumentError
-from work_smarter.shared.persistence.database import (
-    LATEST_SCHEMA_VERSION,
-    ApplicationDatabase,
-)
+from work_smarter.shared.persistence.database import DatabaseConfiguration
+from work_smarter.shared.persistence.sqlite import LATEST_SCHEMA_VERSION, SQLiteDatabaseBackend
 
 
 def test_database_migrations_are_idempotent_and_report_the_current_schema(tmp_path: Path) -> None:
-    database = ApplicationDatabase(tmp_path / "work-smarter.db")
+    database = SQLiteDatabaseBackend.for_path(tmp_path / "work-smarter.db")
 
     first = database.migrate()
     second = database.migrate()
@@ -27,7 +25,7 @@ def test_database_migrations_are_idempotent_and_report_the_current_schema(tmp_pa
 
 def test_database_refuses_a_schema_created_by_a_newer_application(tmp_path: Path) -> None:
     path = tmp_path / "work-smarter.db"
-    database = ApplicationDatabase(path)
+    database = SQLiteDatabaseBackend.for_path(path)
     database.migrate()
     with sqlite3.connect(path) as connection:
         connection.execute(
@@ -40,7 +38,7 @@ def test_database_refuses_a_schema_created_by_a_newer_application(tmp_path: Path
 
 
 def test_activity_events_are_append_only(tmp_path: Path) -> None:
-    database = ApplicationDatabase(tmp_path / "work-smarter.db")
+    database = SQLiteDatabaseBackend.for_path(tmp_path / "work-smarter.db")
     database.migrate()
     with database.transaction() as connection:
         connection.execute(
@@ -69,7 +67,7 @@ def test_activity_events_are_append_only(tmp_path: Path) -> None:
 
 
 def test_online_snapshot_excludes_an_uncommitted_transaction(tmp_path: Path) -> None:
-    database = ApplicationDatabase(tmp_path / "work-smarter.db")
+    database = SQLiteDatabaseBackend.for_path(tmp_path / "work-smarter.db")
     database.migrate()
     snapshot = tmp_path / "snapshot.db"
 
@@ -95,3 +93,11 @@ def test_online_snapshot_excludes_an_uncommitted_transaction(tmp_path: Path) -> 
 
     assert event is None
     assert integrity == ("ok",)
+
+
+def test_sqlite_location_cannot_escape_the_workspace(tmp_path: Path) -> None:
+    with pytest.raises(InvalidDocumentError, match="escapes the workspace"):
+        SQLiteDatabaseBackend(
+            tmp_path / "workspace",
+            DatabaseConfiguration(backend="sqlite", location="../outside.db"),
+        )

@@ -16,7 +16,7 @@ SQLiteへ曖昧な二重書込みを行いません。
 - `work_smarter.project_management`: managed project boundary
 - `work_smarter.api`: GTDとKnowledge routerをmountするtyped HTTP host
 - `work_smarter.cli`: feature subcommandをmountするkeyboard/script host
-- `work_smarter.shared.persistence`: SQLite接続、transaction、forward-only migration
+- `work_smarter.shared.persistence`: database Port、adapter registry、provider別migration/backup
 
 新featureはgeneric storageへmodelを追加せず、`EntitySpec`をcomposition rootへ登録します。
 
@@ -33,6 +33,7 @@ python3.12 -m venv .venv
 - [Branching](branching.md)
 - [Testing](testing.md)
 - [Database persistence and SQL safety](database.md)
+- [Selectable database adapters ADR](../architecture/0004-selectable-database-adapters.md)
 - [Developing the GTD workflow](gtd-workflow.md)
 - [Developing Knowledge](knowledge.md)
 - [Developing project management](project-management.md)

@@ -12,6 +12,7 @@ All notable changes to Work Smarter are documented here.
 - Provider-neutral publishing and Confluence Cloud dry-run/push/pull with conflict detection.
 - VS Code tasks, typed OpenAPI contracts, a cross-feature overview, and checksummed workspace archives.
 - SQLite migrations, append-only activity events, outbox schema, and consistent online snapshots.
+- A selectable database port and adapter registry with backend-aware backup manifests.
 
 ### Security
 

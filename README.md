@@ -1,6 +1,6 @@
 # Work Smarter
 
-構造化情報をSQLiteへ段階移行し、narrative本文をMarkdownで扱う、
+構造化情報を選択可能なDatabase backendへ段階移行し、narrative本文をMarkdownで扱う、
 エンジニア個人向けのPersonal Engineering Workbenchです。
 
 現在の `0.1.0` はGTD workflow、独立Knowledge、managed project、Confluence publishingを
@@ -19,7 +19,7 @@
 - waiting / blocked / scheduledからreadyへの復帰
 - 日次status、週次review、workspace doctor、実績metrics
 - 既存domainの1 entity = 1 Markdown、YAML frontmatter、append-only JSONL監査ログ
-- SQLite migration、append-only activity event、integration outboxの基盤
+- Database Portとadapter registry、SQLite migration、activity event、integration outboxの基盤
 - 1 Knowledge note = 1 Markdown、用途別template、tag、alias、source
 - workspace entityへの明示的link、導出backlink、title/tag/body/alias検索
 - GTD taskやInbox itemなど既存recordからKnowledgeへのidempotentなpromotion

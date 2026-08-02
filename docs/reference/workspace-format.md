@@ -5,9 +5,9 @@
 - 現行domain entityの現在状態: Markdown + YAML frontmatter
 - 現行domainの操作・timer・review履歴: `.work-smarter/events.ndjson`
 - Knowledge search/backlink: 現在のMarkdownから都度再構築するprojection
-- Application database: `.work-smarter/work-smarter.db`
+- Application database: workspace configで選択したbackend artifact（初期値はSQLite）
 
-SQLiteはmigration metadata、append-only activity event、outbox schemaを持つ。GTD、Knowledge、
+SQLite adapterはmigration metadata、append-only activity event、outbox schemaを持つ。GTD、Knowledge、
 Managed Projectの正本は各domain migrationが完了するまでMarkdown/JSONLであり、曖昧な二重書込みはしない。
 Targetの正本境界は[ADR 0003](../architecture/0003-hybrid-source-of-truth-and-local-application-server.md)
 を参照する。
@@ -194,6 +194,13 @@ v2 rigorous taskは新しいassurance gateで読めなくならないよう、fr
 
 ## Backup representation
 
-`ws workspace export`はSQLite backup APIで`.work-smarter/work-smarter.db`の一貫snapshotを作り、
+`ws workspace export`は選択中adapterで一貫snapshotを作り、backend名とmember pathをmanifestへ記録して
 checksummed archiveへ格納する。SQLiteの`-wal`、`-shm`、`-journal`はruntime sidecarであり、backupへ
-含めない。Restoreは展開前にSHA-256、path、SQLite integrity、migration metadataを検査する。
+含めない。Restoreは展開前にSHA-256、pathを検査し、manifestに記録された同じadapterでsnapshotを検証する。
+Database設定は次の形で、credentialを含めない。
+
+```yaml
+database:
+  backend: sqlite
+  location: null
+```

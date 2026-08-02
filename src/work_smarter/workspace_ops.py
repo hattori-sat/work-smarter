@@ -3,31 +3,36 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import tempfile
 import zipfile
 from collections import Counter
 from datetime import datetime
 from pathlib import Path, PurePosixPath
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+import yaml
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from work_smarter.errors import InvalidDocumentError
 from work_smarter.gtd.service import GtdService
 from work_smarter.knowledge.service import KnowledgeService
 from work_smarter.project_management.service import ProjectManagementService
-from work_smarter.shared.persistence.database import DATABASE_NAME, ApplicationDatabase
-from work_smarter.storage.workspace import Workspace
+from work_smarter.shared.persistence.database import (
+    DatabaseBackendRegistry,
+    DatabaseConfiguration,
+    default_database_registry,
+)
+from work_smarter.storage.workspace import Workspace, WorkspaceSettings
 
 MANIFEST_NAME = "WORK-SMARTER-BACKUP.json"
 EXCLUDED_PARTS = {"cache", "secrets", "__pycache__"}
 EXCLUDED_NAMES = {"workspace.lock", ".DS_Store"}
-DATABASE_RELATIVE_PATH = f".work-smarter/{DATABASE_NAME}"
-DATABASE_SIDECARS = {
-    f"{DATABASE_RELATIVE_PATH}-journal",
-    f"{DATABASE_RELATIVE_PATH}-shm",
-    f"{DATABASE_RELATIVE_PATH}-wal",
+LEGACY_SQLITE_MEMBER = ".work-smarter/work-smarter.db"
+LEGACY_SQLITE_SIDECARS = {
+    f"{LEGACY_SQLITE_MEMBER}-journal",
+    f"{LEGACY_SQLITE_MEMBER}-shm",
+    f"{LEGACY_SQLITE_MEMBER}-wal",
 }
 
 
@@ -69,11 +74,29 @@ class MigrationReport(OperationsModel):
     record_count: int
 
 
+class DatabaseArchiveMetadata(OperationsModel):
+    backend: str
+    member: str
+
+
+class BackupManifest(OperationsModel):
+    format: Literal["work-smarter-backup"]
+    version: Literal[1]
+    files: dict[str, str]
+    database: DatabaseArchiveMetadata | None = None
+
+
 class WorkspaceOperations:
     """Coordinate features without importing one feature's private model into another."""
 
-    def __init__(self, workspace: Workspace):
+    def __init__(
+        self,
+        workspace: Workspace,
+        *,
+        database_registry: DatabaseBackendRegistry | None = None,
+    ):
         self.workspace = workspace
+        self.database_registry = database_registry or default_database_registry()
 
     def overview(self) -> WorkspaceOverview:
         enabled = set(self.workspace.settings().features)
@@ -130,25 +153,29 @@ class WorkspaceOperations:
         archive = Path(destination).expanduser().resolve()
         archive.parent.mkdir(parents=True, exist_ok=True)
         with self.workspace.lock():
+            database = self.database_registry.create(
+                self.workspace.root,
+                self.workspace.settings().database,
+            )
             files = self._included_files(self.workspace.root, excluding=archive)
             regular_files = [
                 path
                 for path in files
                 if path.relative_to(self.workspace.root).as_posix()
-                not in {DATABASE_RELATIVE_PATH, *DATABASE_SIDECARS}
+                not in database.workspace_members
             ]
             with tempfile.TemporaryDirectory(prefix="work-smarter-backup-") as temporary_dir:
-                snapshot: Path | None = None
-                database_entry = self.workspace.state_dir / DATABASE_NAME
-                database = ApplicationDatabase(database_entry)
-                if database_entry.is_symlink() or not database.path.is_relative_to(
-                    self.workspace.root
-                ):
-                    raise InvalidDocumentError(
-                        "application database must be a regular file inside the workspace"
-                    )
-                if database.path.is_file():
-                    snapshot = database.snapshot(Path(temporary_dir) / DATABASE_NAME)
+                snapshot = None
+                if database.status().initialized:
+                    snapshot = database.create_snapshot(Path(temporary_dir))
+                    self._safe_member(snapshot.archive_member)
+                    if (
+                        snapshot.backend != database.name
+                        or snapshot.archive_member != database.archive_member
+                    ):
+                        raise InvalidDocumentError(
+                            "database adapter returned inconsistent snapshot metadata"
+                        )
                 hashes = {
                     path.relative_to(self.workspace.root).as_posix(): hashlib.sha256(
                         path.read_bytes()
@@ -156,14 +183,21 @@ class WorkspaceOperations:
                     for path in regular_files
                 }
                 if snapshot is not None:
-                    hashes[DATABASE_RELATIVE_PATH] = hashlib.sha256(
-                        snapshot.read_bytes()
+                    hashes[snapshot.archive_member] = hashlib.sha256(
+                        snapshot.path.read_bytes()
                     ).hexdigest()
-                manifest = {
-                    "format": "work-smarter-backup",
-                    "version": 1,
-                    "files": hashes,
-                }
+                database_metadata = None
+                if snapshot is not None:
+                    database_metadata = DatabaseArchiveMetadata(
+                        backend=snapshot.backend,
+                        member=snapshot.archive_member,
+                    )
+                manifest = BackupManifest(
+                    format="work-smarter-backup",
+                    version=1,
+                    files=hashes,
+                    database=database_metadata,
+                )
                 temporary: Path | None = None
                 try:
                     with tempfile.NamedTemporaryFile(
@@ -177,8 +211,11 @@ class WorkspaceOperations:
                         for path in regular_files:
                             bundle.write(path, path.relative_to(self.workspace.root).as_posix())
                         if snapshot is not None:
-                            bundle.write(snapshot, DATABASE_RELATIVE_PATH)
-                        bundle.writestr(MANIFEST_NAME, json.dumps(manifest, sort_keys=True))
+                            bundle.write(snapshot.path, snapshot.archive_member)
+                        bundle.writestr(
+                            MANIFEST_NAME,
+                            manifest.model_dump_json(exclude_none=True),
+                        )
                     os.replace(temporary, archive)
                 except OSError:
                     if temporary is not None:
@@ -198,7 +235,13 @@ class WorkspaceOperations:
         return member
 
     @classmethod
-    def restore(cls, source: Path | str, destination: Path | str) -> ArchiveReport:
+    def restore(
+        cls,
+        source: Path | str,
+        destination: Path | str,
+        *,
+        database_registry: DatabaseBackendRegistry | None = None,
+    ) -> ArchiveReport:
         archive = Path(source).expanduser().resolve()
         root = Path(destination).expanduser().resolve()
         if root.exists() and any(root.iterdir()):
@@ -210,32 +253,74 @@ class WorkspaceOperations:
                     cls._safe_member(name)
                 if MANIFEST_NAME not in names:
                     raise InvalidDocumentError("backup manifest is missing")
-                manifest = json.loads(bundle.read(MANIFEST_NAME))
-                if manifest.get("format") != "work-smarter-backup" or manifest.get("version") != 1:
-                    raise InvalidDocumentError("unsupported backup format")
-                expected: dict[str, str] = manifest.get("files", {})
+                manifest = BackupManifest.model_validate_json(bundle.read(MANIFEST_NAME))
+                expected = manifest.files
                 if set(names) - {MANIFEST_NAME} != set(expected):
                     raise InvalidDocumentError("backup manifest does not match archive members")
-                sidecars = set(expected) & DATABASE_SIDECARS
-                if sidecars:
-                    raise InvalidDocumentError(
-                        "backup contains SQLite sidecar files instead of a consistent snapshot"
-                    )
                 payloads: dict[str, bytes] = {}
                 for name, digest in expected.items():
                     data = bundle.read(name)
                     if hashlib.sha256(data).hexdigest() != digest:
                         raise InvalidDocumentError(f"backup checksum mismatch: {name}")
                     payloads[name] = data
-        except (OSError, zipfile.BadZipFile, json.JSONDecodeError) as exc:
+        except (OSError, zipfile.BadZipFile, ValidationError) as exc:
             raise InvalidDocumentError(f"invalid workspace backup {archive}: {exc}") from exc
 
-        database_payload = payloads.get(DATABASE_RELATIVE_PATH)
-        if database_payload is not None:
+        metadata = manifest.database
+        if metadata is None and (
+            LEGACY_SQLITE_MEMBER in payloads or set(payloads) & LEGACY_SQLITE_SIDECARS
+        ):
+            metadata = DatabaseArchiveMetadata(
+                backend="sqlite",
+                member=LEGACY_SQLITE_MEMBER,
+            )
+        if metadata is not None:
+            cls._safe_member(metadata.member)
+            registry = database_registry or default_database_registry()
             with tempfile.TemporaryDirectory(prefix="work-smarter-restore-") as temporary_dir:
-                database_path = Path(temporary_dir) / DATABASE_NAME
-                database_path.write_bytes(database_payload)
-                ApplicationDatabase(database_path).verify()
+                temporary_root = Path(temporary_dir)
+                database = registry.create(
+                    temporary_root,
+                    DatabaseConfiguration(
+                        backend=metadata.backend,
+                        location=metadata.member,
+                    ),
+                )
+                if database.archive_member != metadata.member:
+                    raise InvalidDocumentError(
+                        "database manifest member does not match backend configuration"
+                    )
+                sidecars = (database.workspace_members - {metadata.member}) & set(payloads)
+                if sidecars:
+                    raise InvalidDocumentError(
+                        "backup contains database sidecar files instead of a consistent snapshot"
+                    )
+                if metadata.member not in payloads:
+                    raise InvalidDocumentError("database snapshot is missing from backup")
+                database_path = temporary_root.joinpath(*PurePosixPath(metadata.member).parts)
+                database_path.parent.mkdir(parents=True, exist_ok=True)
+                database_path.write_bytes(payloads[metadata.member])
+                database.verify_snapshot(database_path)
+
+            config_payload = payloads.get(".work-smarter/config.yml")
+            if config_payload is not None:
+                try:
+                    settings = WorkspaceSettings.model_validate(
+                        yaml.safe_load(config_payload.decode("utf-8")) or {}
+                    )
+                except (UnicodeDecodeError, yaml.YAMLError, ValidationError) as exc:
+                    raise InvalidDocumentError(
+                        f"invalid workspace config in backup: {exc}"
+                    ) from exc
+                if settings.database.backend != metadata.backend:
+                    raise InvalidDocumentError(
+                        "workspace database backend does not match backup manifest"
+                    )
+                configured = registry.create(root, settings.database)
+                if configured.archive_member != metadata.member:
+                    raise InvalidDocumentError(
+                        "workspace database location does not match backup manifest"
+                    )
 
         root.mkdir(parents=True, exist_ok=True)
         for name, data in payloads.items():

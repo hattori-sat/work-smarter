@@ -17,7 +17,8 @@ from work_smarter.knowledge.models import KnowledgeNoteType
 from work_smarter.knowledge.service import KnowledgeService
 from work_smarter.project_management.models import ProjectLifecycle
 from work_smarter.project_management.service import ProjectManagementService
-from work_smarter.shared.persistence.database import ApplicationDatabase
+from work_smarter.shared.persistence.database import DatabaseConfiguration
+from work_smarter.shared.persistence.sqlite import SQLiteDatabaseBackend
 from work_smarter.workspace_ops import WorkspaceOperations
 
 runner = CliRunner()
@@ -65,7 +66,7 @@ def test_backup_restore_round_trip_preserves_documents_and_events(tmp_path: Path
 
 def test_backup_uses_a_consistent_sqlite_snapshot_without_wal_sidecars(tmp_path: Path) -> None:
     workspace = initialize_workspace(tmp_path / "source")
-    database = ApplicationDatabase.for_workspace(workspace.root)
+    database = SQLiteDatabaseBackend(workspace.root, DatabaseConfiguration())
     archive = tmp_path / "backup.ws.zip"
     injection_payload = "EVT-1'); DROP TABLE activity_events; --"
 
@@ -92,7 +93,7 @@ def test_backup_uses_a_consistent_sqlite_snapshot_without_wal_sidecars(tmp_path:
 
     restored_root = tmp_path / "restored"
     WorkspaceOperations.restore(archive, restored_root)
-    restored_database = ApplicationDatabase.for_workspace(restored_root)
+    restored_database = SQLiteDatabaseBackend(restored_root, DatabaseConfiguration())
     with sqlite3.connect(restored_database.path) as connection:
         event = connection.execute(
             "SELECT id FROM activity_events WHERE id = ?",

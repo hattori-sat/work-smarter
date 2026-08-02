@@ -14,9 +14,14 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from work_smarter import __version__
 from work_smarter.composition import (
+    configured_database,
+)
+from work_smarter.composition import (
     initialize_workspace as initialize_composed_workspace,
 )
-from work_smarter.composition import open_workspace as open_composed_workspace
+from work_smarter.composition import (
+    open_workspace as open_composed_workspace,
+)
 from work_smarter.errors import (
     EntityNotFoundError,
     InvalidDocumentError,
@@ -60,7 +65,7 @@ from work_smarter.project_management.errors import (
     ProjectTransitionError,
 )
 from work_smarter.project_management.service import ProjectManagementService
-from work_smarter.shared.persistence.database import ApplicationDatabase
+from work_smarter.shared.persistence.database import DatabaseBackendRegistry
 
 
 class ApiModel(BaseModel):
@@ -68,6 +73,7 @@ class ApiModel(BaseModel):
 
 
 class DatabaseHealth(ApiModel):
+    backend: str
     initialized: bool
     schema_version: int
     latest_schema_version: int
@@ -84,6 +90,7 @@ class HealthResponse(ApiModel):
 class WorkspaceInitializationResponse(ApiModel):
     workspace: str
     initialized: bool
+    database_backend: str
     database_schema_version: int
 
 
@@ -614,7 +621,11 @@ def create_gtd_router(service_dependency: Any) -> APIRouter:
     return router
 
 
-def create_app(workspace_path: Path | str | None = None) -> FastAPI:
+def create_app(
+    workspace_path: Path | str | None = None,
+    *,
+    database_registry: DatabaseBackendRegistry | None = None,
+) -> FastAPI:
     """Create an isolated application for a configured local workspace."""
 
     configured = (
@@ -622,7 +633,7 @@ def create_app(workspace_path: Path | str | None = None) -> FastAPI:
         .expanduser()
         .resolve()
     )
-    database = ApplicationDatabase.for_workspace(configured)
+    database = configured_database(configured, database_registry=database_registry)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -679,6 +690,7 @@ def create_app(workspace_path: Path | str | None = None) -> FastAPI:
             workspace=str(configured),
             initialized=(configured / ".work-smarter" / "config.yml").is_file(),
             database=DatabaseHealth(
+                backend=database.name,
                 initialized=database_status.initialized,
                 schema_version=database_status.schema_version,
                 latest_schema_version=database_status.latest_schema_version,
@@ -687,11 +699,15 @@ def create_app(workspace_path: Path | str | None = None) -> FastAPI:
 
     @app.post("/api/workspace/init", tags=["system"], status_code=201)
     def initialize_workspace() -> WorkspaceInitializationResponse:
-        workspace = initialize_composed_workspace(configured)
+        workspace = initialize_composed_workspace(
+            configured,
+            database_registry=database_registry,
+        )
         status = database.status()
         return WorkspaceInitializationResponse(
             workspace=str(workspace.root),
             initialized=True,
+            database_backend=database.name,
             database_schema_version=status.schema_version,
         )
 

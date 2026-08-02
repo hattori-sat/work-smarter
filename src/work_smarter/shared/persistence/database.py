@@ -1,26 +1,54 @@
-"""SQLite application database and forward-only schema migrations."""
+"""Database port, backend selection, and provider-neutral backup contracts."""
 
 from __future__ import annotations
 
-import os
-import sqlite3
-import tempfile
-from collections.abc import Iterator
-from contextlib import closing, contextmanager
+import re
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from importlib.metadata import entry_points
 from pathlib import Path
+from typing import Protocol, runtime_checkable
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from work_smarter.errors import InvalidDocumentError
 
-DATABASE_NAME = "work-smarter.db"
-LATEST_SCHEMA_VERSION = 1
+DATABASE_BACKEND_ENTRY_POINT = "work_smarter.database_backends"
+BACKEND_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
+
+
+class DatabaseConfiguration(BaseModel):
+    """Provider-neutral workspace selection; credentials must remain external."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    backend: str = Field(default="sqlite", min_length=1, max_length=64)
+    location: str | None = Field(default=None, min_length=1)
+
+    @field_validator("backend")
+    @classmethod
+    def validate_backend(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if not BACKEND_NAME_PATTERN.fullmatch(normalized):
+            raise ValueError("use lowercase letters, numbers, '_' or '-'")
+        return normalized
+
+    @field_validator("location")
+    @classmethod
+    def validate_location(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned or "\x00" in cleaned:
+            raise ValueError("database location must be a non-empty safe string")
+        return cleaned
 
 
 @dataclass(frozen=True, slots=True)
 class DatabaseStatus:
     initialized: bool
     schema_version: int
-    latest_schema_version: int = LATEST_SCHEMA_VERSION
+    latest_schema_version: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,236 +57,108 @@ class DatabaseMigrationReport:
     applied_versions: list[int]
 
 
-def _apply_foundation_schema(connection: sqlite3.Connection) -> None:
-    connection.execute(
-        """
-        CREATE TABLE activity_events (
-            id TEXT PRIMARY KEY,
-            aggregate_type TEXT NOT NULL,
-            aggregate_id TEXT NOT NULL,
-            event_type TEXT NOT NULL,
-            event_version INTEGER NOT NULL CHECK (event_version >= 1),
-            occurred_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-            actor TEXT,
-            correlation_id TEXT,
-            causation_id TEXT,
-            payload TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(payload))
-        ) STRICT
-        """
-    )
-    connection.execute(
-        """
-        CREATE INDEX activity_events_aggregate
-        ON activity_events(aggregate_type, aggregate_id, occurred_at)
-        """
-    )
-    connection.execute(
-        """
-        CREATE TRIGGER activity_events_no_update
-        BEFORE UPDATE ON activity_events
-        BEGIN
-            SELECT RAISE(ABORT, 'activity_events are append-only');
-        END
-        """
-    )
-    connection.execute(
-        """
-        CREATE TRIGGER activity_events_no_delete
-        BEFORE DELETE ON activity_events
-        BEGIN
-            SELECT RAISE(ABORT, 'activity_events are append-only');
-        END
-        """
-    )
-    connection.execute(
-        """
-        CREATE TABLE outbox_items (
-            id TEXT PRIMARY KEY,
-            operation_id TEXT NOT NULL UNIQUE,
-            destination TEXT NOT NULL,
-            message_type TEXT NOT NULL,
-            payload TEXT NOT NULL CHECK (json_valid(payload)),
-            status TEXT NOT NULL DEFAULT 'pending'
-                CHECK (status IN ('pending', 'processing', 'completed', 'failed')),
-            attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
-            available_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-            completed_at TEXT,
-            last_error TEXT
-        ) STRICT
-        """
-    )
-    connection.execute(
-        """
-        CREATE INDEX outbox_items_delivery
-        ON outbox_items(status, available_at)
-        """
-    )
+@dataclass(frozen=True, slots=True)
+class DatabaseSnapshot:
+    backend: str
+    archive_member: str
+    path: Path
 
 
-MIGRATIONS = ((1, "architecture_foundation", _apply_foundation_schema),)
+@runtime_checkable
+class DatabaseBackend(Protocol):
+    """Port implemented by SQLite, Access, or another persistence adapter."""
 
-
-class ApplicationDatabase:
-    """Own the application database without exposing SQLite to domain modules."""
-
-    def __init__(self, path: Path | str):
-        self.path = Path(path).expanduser().resolve()
-
-    @classmethod
-    def for_workspace(cls, workspace_root: Path | str) -> ApplicationDatabase:
-        return cls(Path(workspace_root) / ".work-smarter" / DATABASE_NAME)
-
-    def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.path, timeout=5)
-        connection.execute("PRAGMA foreign_keys = ON")
-        connection.execute("PRAGMA busy_timeout = 5000")
-        return connection
-
-    @contextmanager
-    def transaction(self) -> Iterator[sqlite3.Connection]:
-        connection = self._connect()
-        try:
-            connection.execute("BEGIN IMMEDIATE")
-            yield connection
-            connection.commit()
-        except BaseException:
-            connection.rollback()
-            raise
-        finally:
-            connection.close()
+    name: str
+    archive_member: str
+    workspace_members: frozenset[str]
 
     def status(self) -> DatabaseStatus:
-        if not self.path.is_file():
-            return DatabaseStatus(initialized=False, schema_version=0)
-        try:
-            with closing(self._connect()) as connection:
-                table = connection.execute(
-                    """
-                    SELECT 1 FROM sqlite_master
-                    WHERE type = 'table' AND name = 'schema_migrations'
-                    """
-                ).fetchone()
-                if table is None:
-                    return DatabaseStatus(initialized=False, schema_version=0)
-                row = connection.execute(
-                    "SELECT COALESCE(MAX(version), 0) FROM schema_migrations"
-                ).fetchone()
-        except sqlite3.DatabaseError as exc:
-            raise InvalidDocumentError(f"Invalid application database {self.path}: {exc}") from exc
-        return DatabaseStatus(initialized=True, schema_version=int(row[0]))
-
-    def verify(self) -> DatabaseStatus:
-        """Verify SQLite integrity and the Work Smarter schema without modifying it."""
-
-        if not self.path.is_file():
-            raise InvalidDocumentError(f"Application database is missing: {self.path}")
-        try:
-            with closing(sqlite3.connect(self.path, timeout=5)) as connection:
-                integrity = connection.execute("PRAGMA quick_check").fetchone()
-                if integrity != ("ok",):
-                    detail = integrity[0] if integrity else "no integrity result"
-                    raise InvalidDocumentError(
-                        f"Invalid application database {self.path}: {detail}"
-                    )
-                table = connection.execute(
-                    """
-                    SELECT 1 FROM sqlite_master
-                    WHERE type = 'table' AND name = 'schema_migrations'
-                    """
-                ).fetchone()
-                if table is None:
-                    raise InvalidDocumentError(
-                        f"Invalid application database {self.path}: migration metadata is missing"
-                    )
-                row = connection.execute(
-                    "SELECT COALESCE(MAX(version), 0) FROM schema_migrations"
-                ).fetchone()
-        except sqlite3.DatabaseError as exc:
-            raise InvalidDocumentError(f"Invalid application database {self.path}: {exc}") from exc
-        version = int(row[0])
-        if version > LATEST_SCHEMA_VERSION:
-            raise InvalidDocumentError(
-                f"Database schema {version} is newer than this application "
-                f"(latest {LATEST_SCHEMA_VERSION})"
-            )
-        return DatabaseStatus(initialized=True, schema_version=version)
-
-    def snapshot(self, destination: Path | str) -> Path:
-        """Create an atomic, transactionally consistent online SQLite snapshot."""
-
-        target = Path(destination).expanduser().resolve()
-        if target == self.path:
-            raise InvalidDocumentError("Database snapshot destination must differ from source")
-        if not self.path.is_file():
-            raise InvalidDocumentError(f"Application database is missing: {self.path}")
-        target.parent.mkdir(parents=True, exist_ok=True)
-        temporary: Path | None = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                dir=target.parent,
-                prefix=f".{target.name}.",
-                suffix=".tmp",
-                delete=False,
-            ) as stream:
-                temporary = Path(stream.name)
-            with (
-                closing(self._connect()) as source,
-                closing(sqlite3.connect(temporary, timeout=5)) as snapshot,
-            ):
-                source.backup(snapshot)
-            ApplicationDatabase(temporary).verify()
-            with temporary.open("rb") as stream:
-                os.fsync(stream.fileno())
-            os.replace(temporary, target)
-        except InvalidDocumentError:
-            if temporary is not None:
-                temporary.unlink(missing_ok=True)
-            raise
-        except (OSError, sqlite3.DatabaseError) as exc:
-            if temporary is not None:
-                temporary.unlink(missing_ok=True)
-            raise InvalidDocumentError(
-                f"Cannot snapshot application database {self.path}: {exc}"
-            ) from exc
-        return target
+        """Report initialization and adapter-specific schema versions."""
 
     def migrate(self) -> DatabaseMigrationReport:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        applied: list[int] = []
-        try:
-            with self.transaction() as connection:
-                connection.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS schema_migrations (
-                        version INTEGER PRIMARY KEY,
-                        name TEXT NOT NULL,
-                        applied_at TEXT NOT NULL
-                            DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-                    ) STRICT
-                    """
-                )
-                row = connection.execute(
-                    "SELECT COALESCE(MAX(version), 0) FROM schema_migrations"
-                ).fetchone()
-                current = int(row[0])
-                if current > LATEST_SCHEMA_VERSION:
-                    raise InvalidDocumentError(
-                        f"Database schema {current} is newer than this application "
-                        f"(latest {LATEST_SCHEMA_VERSION})"
-                    )
-                for version, name, apply in MIGRATIONS:
-                    if version <= current:
-                        continue
-                    apply(connection)
-                    connection.execute(
-                        "INSERT INTO schema_migrations(version, name) VALUES (?, ?)",
-                        (version, name),
-                    )
-                    applied.append(version)
-                    current = version
-        except sqlite3.DatabaseError as exc:
+        """Bring this backend to the schema version supported by its adapter."""
+
+    def create_snapshot(self, destination: Path) -> DatabaseSnapshot:
+        """Create a consistent artifact inside the supplied temporary directory."""
+
+    def verify_snapshot(self, path: Path) -> DatabaseStatus:
+        """Validate a snapshot without mutating the source workspace."""
+
+
+DatabaseBackendFactory = Callable[[Path, DatabaseConfiguration], DatabaseBackend]
+
+
+class DatabaseBackendRegistry:
+    """Resolve a configured backend without leaking its driver into application code."""
+
+    def __init__(self) -> None:
+        self._factories: dict[str, DatabaseBackendFactory] = {}
+
+    @property
+    def names(self) -> tuple[str, ...]:
+        return tuple(sorted(self._factories))
+
+    def register(self, name: str, factory: DatabaseBackendFactory) -> None:
+        normalized = name.strip().lower()
+        if not BACKEND_NAME_PATTERN.fullmatch(normalized):
+            raise ValueError(f"Invalid database backend name: {name!r}")
+        if normalized in self._factories:
+            raise ValueError(f"Database backend already registered: {normalized}")
+        self._factories[normalized] = factory
+
+    def create(
+        self,
+        workspace_root: Path | str,
+        configuration: DatabaseConfiguration,
+    ) -> DatabaseBackend:
+        factory = self._factories.get(configuration.backend)
+        if factory is None:
+            available = ", ".join(self.names) or "none"
             raise InvalidDocumentError(
-                f"Cannot migrate application database {self.path}: {exc}"
-            ) from exc
-        return DatabaseMigrationReport(schema_version=current, applied_versions=applied)
+                f"Database backend {configuration.backend!r} is not available; "
+                f"installed backends: {available}"
+            )
+        backend = factory(Path(workspace_root).expanduser().resolve(), configuration)
+        if not isinstance(backend, DatabaseBackend):
+            raise TypeError(
+                f"Database factory {configuration.backend!r} returned an invalid adapter"
+            )
+        if backend.name != configuration.backend:
+            raise TypeError(
+                f"Database adapter name {backend.name!r} does not match "
+                f"configuration {configuration.backend!r}"
+            )
+        return backend
+
+
+def _sqlite_factory(
+    workspace_root: Path,
+    configuration: DatabaseConfiguration,
+) -> DatabaseBackend:
+    from work_smarter.shared.persistence.sqlite import SQLiteDatabaseBackend
+
+    return SQLiteDatabaseBackend(workspace_root, configuration)
+
+
+def default_database_registry(
+    extra: Iterable[tuple[str, DatabaseBackendFactory]] = (),
+) -> DatabaseBackendRegistry:
+    """Build the runtime registry from the built-in SQLite and installed adapters."""
+
+    registry = DatabaseBackendRegistry()
+    registry.register("sqlite", _sqlite_factory)
+    for entry_point in entry_points(group=DATABASE_BACKEND_ENTRY_POINT):
+        registry.register(entry_point.name, entry_point.load())
+    for name, factory in extra:
+        registry.register(name, factory)
+    return registry
+
+
+def create_database_backend(
+    workspace_root: Path | str,
+    configuration: DatabaseConfiguration,
+    *,
+    registry: DatabaseBackendRegistry | None = None,
+) -> DatabaseBackend:
+    selected = registry or default_database_registry()
+    return selected.create(workspace_root, configuration)
