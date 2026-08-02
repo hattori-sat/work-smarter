@@ -1,0 +1,9 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {"label": "GTD inbox", "type": "shell", "command": "ws --workspace ${workspaceFolder} inbox list"},
+    {"label": "GTD daily dashboard", "type": "shell", "command": "ws --workspace ${workspaceFolder} dashboard"},
+    {"label": "Project schedule", "type": "shell", "command": "ws --workspace ${workspaceFolder} pm schedule ${input:projectId} --format html --output views/${input:projectId}.html --force"}
+  ],
+  "inputs": [{"id": "projectId", "type": "promptString", "description": "Managed project ID"}]
+}

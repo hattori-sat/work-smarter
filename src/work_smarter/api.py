@@ -48,6 +48,17 @@ from work_smarter.gtd.models import (
     WorkType,
 )
 from work_smarter.gtd.service import GtdService
+from work_smarter.knowledge.api import create_knowledge_router
+from work_smarter.knowledge.service import KnowledgeService
+from work_smarter.project_management.api import create_project_management_router
+from work_smarter.project_management.errors import (
+    ProjectCompletionGateError,
+    ProjectConflictError,
+    ProjectItemNotFoundError,
+    ProjectScheduleError,
+    ProjectTransitionError,
+)
+from work_smarter.project_management.service import ProjectManagementService
 
 
 class ApiModel(BaseModel):
@@ -599,12 +610,28 @@ def create_app(workspace_path: Path | str | None = None) -> FastAPI:
     def get_service(request: Request) -> GtdService:
         return GtdService(open_composed_workspace(request.app.state.workspace_path))
 
+    def get_knowledge_service(request: Request) -> KnowledgeService:
+        return KnowledgeService(open_composed_workspace(request.app.state.workspace_path))
+
+    def get_project_management_service(request: Request) -> ProjectManagementService:
+        return ProjectManagementService(open_composed_workspace(request.app.state.workspace_path))
+
     @app.exception_handler(WorkSmarterError)
     async def work_smarter_error(_request: Request, exc: WorkSmarterError) -> JSONResponse:
         status_code = 400
-        if isinstance(exc, EntityNotFoundError):
+        if isinstance(exc, (EntityNotFoundError, ProjectItemNotFoundError)):
             status_code = 404
-        elif isinstance(exc, (WipLimitError, InvalidTransitionError)):
+        elif isinstance(
+            exc,
+            (
+                WipLimitError,
+                InvalidTransitionError,
+                ProjectCompletionGateError,
+                ProjectConflictError,
+                ProjectScheduleError,
+                ProjectTransitionError,
+            ),
+        ):
             status_code = 409
         elif isinstance(exc, (InvalidDocumentError, WorkspaceNotInitializedError)):
             status_code = 400
@@ -628,6 +655,8 @@ def create_app(workspace_path: Path | str | None = None) -> FastAPI:
         return {"workspace": str(workspace.root), "initialized": True}
 
     app.include_router(create_gtd_router(get_service))
+    app.include_router(create_knowledge_router(get_knowledge_service))
+    app.include_router(create_project_management_router(get_project_management_service))
     return app
 
 

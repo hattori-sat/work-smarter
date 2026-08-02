@@ -109,50 +109,55 @@ main
 
 ### M3 Knowledge — `feat/knowledge`
 
-- [ ] independent knowledge entity/repository/service
-- [ ] note / decision / how-to / reference / meeting-note templates
-- [ ] tags、aliases、outbound links、backlinks
-- [ ] title/tag/body search
-- [ ] captureからknowledgeへのpromotion
-- [ ] orphan/broken-link doctor
-- [ ] CLI/API
+- Current branch: `feat/knowledge`
+- Status: COMPLETE
+
+- [x] independent knowledge entity/repository/service
+- [x] note / decision / how-to / reference / meeting-note templates
+- [x] tags、aliases、outbound links、backlinks
+- [x] title/tag/body/alias search
+- [x] generic workspace recordからknowledgeへのidempotent promotion
+- [x] orphan/broken/duplicate/ambiguous-link doctor
+- [x] CLI / typed HTTP API / OpenAPI contract
+- [x] 20 Knowledge testsを含む全180 tests green
 
 ### M4 Project management — `feat/project-management`
 
-- [ ] managed project / phase / work package / milestone models
-- [ ] WBS and dependency DAG validation
-- [ ] text schedule format and critical-path calculation
-- [ ] terminal table、Mermaid Gantt、HTML table projection
-- [ ] QCD baseline/current/forecast
-- [ ] risk/opportunity/issue/decision registers
-- [ ] completion criteria、constraints、assumptions、stakeholder fields
-- [ ] NASA/JERGを参考にしたdocument template catalog
-- [ ] GTD actionへのstable-ID link（state machineは共有しない）
-- [ ] CLI/API
+- [x] managed project / phase / work package / milestone models
+- [x] WBS and dependency DAG validation
+- [x] text schedule format and critical-path calculation
+- [x] terminal table、Mermaid Gantt、HTML table projection
+- [x] QCD baseline/current/forecast
+- [x] risk/opportunity/issue/decision registers
+- [x] completion criteria、constraints、assumptions、stakeholder fields
+- [x] NASA/JERGを参考にしたdocument template catalog
+- [x] GTD actionへのstable-ID link（state machineは共有しない）
+- [x] CLI/API
 
 ### M5 Confluence publishing — `feat/confluence-sync`
 
-- [ ] provider-neutral publishable document contract
-- [ ] Confluence frontmatter (`space_key`, `page_id`, `parent_id`, `title`)
-- [ ] Cloud REST client、tokenはenvironment/keyringのみ
-- [ ] Markdown↔Confluence storage-format conversion boundary
-- [ ] dry-run、push、pull
-- [ ] content hash/versionによるconflict detection
-- [ ] project Gantt/QCD table projection
-- [ ] fake server contract tests、credentialsなしacceptance
+- [x] provider-neutral publishable document contract
+- [x] Confluence frontmatter (`space_key`, `page_id`, `parent_id`, `title`)
+- [x] Cloud REST client、tokenはenvironment/keyringのみ
+- [x] Markdown↔Confluence storage-format conversion boundary
+- [x] dry-run、push、pull
+- [x] content hash/versionによるconflict detection
+- [x] project Gantt/QCD table projection
+- [x] fake server contract tests、credentialsなしacceptance
 
 ### M6 VS Code and integration — `feat/vscode-integration`
 
-- [ ] command/task snippets for capture/add/status/focus/review
-- [ ] workspace recommendations and keybinding examples
-- [ ] API schema/client contract
-- [ ] cross-feature dashboard
-- [ ] export/import/backup and migration commands
+- [x] command/task snippets for capture/add/status/focus/review
+- [x] workspace recommendations and keybinding examples
+- [x] typed OpenAPI schema/client contract
+- [x] cross-feature dashboard
+- [x] checksummed export/import/backup and schema migration commands
 
 ### M7 Release quality — `feat/release-quality`
 
-- [ ] user journey acceptance tests
-- [ ] corrupt/crash/concurrency/recovery tests
+- [x] cross-feature user journey acceptance tests
+- [ ] corrupt/crash/concurrency/recovery tests（single-file atomicityとconcurrencyはcovered。
+  multi-file crash recoveryはUNKNOWN）
 - [ ] package install and clean-room smoke test
 - [ ] user manual完成
 - [ ] developer architecture/API/contribution manual完成

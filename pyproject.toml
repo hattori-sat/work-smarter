@@ -32,6 +32,7 @@ ws = "work_smarter.cli:run"
 
 [project.entry-points."work_smarter.features"]
 gtd = "work_smarter.gtd:GtdFeature"
+knowledge = "work_smarter.knowledge:KnowledgeFeature"
 project-management = "work_smarter.project_management:ProjectManagementFeature"
 
 [tool.setuptools.packages.find]

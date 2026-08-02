@@ -12,6 +12,7 @@ from typing import Annotated, Any
 import typer
 
 from work_smarter.composition import initialize_workspace, open_workspace
+from work_smarter.confluence.cli import app as confluence_app
 from work_smarter.errors import WorkSmarterError
 from work_smarter.gtd.models import (
     ClarifyDecision,
@@ -29,6 +30,10 @@ from work_smarter.gtd.models import (
     WorkType,
 )
 from work_smarter.gtd.service import GtdService
+from work_smarter.gtd.tui import run_tui
+from work_smarter.knowledge.cli import app as knowledge_app
+from work_smarter.project_management.cli import app as project_management_app
+from work_smarter.workspace_ops import WorkspaceOperations
 
 app = typer.Typer(
     name="ws",
@@ -45,8 +50,63 @@ review_app = typer.Typer(
     invoke_without_command=True,
     no_args_is_help=False,
 )
+workspace_app = typer.Typer(
+    help="Export, import, and migrate a complete workspace.",
+    no_args_is_help=True,
+)
 app.add_typer(task_app, name="task")
 app.add_typer(review_app, name="review")
+app.add_typer(knowledge_app, name="knowledge")
+app.add_typer(project_management_app, name="pm")
+app.add_typer(confluence_app, name="confluence")
+app.add_typer(workspace_app, name="workspace")
+
+
+@app.command("tui")
+def tui(ctx: typer.Context) -> None:
+    """Open the vim-like GTD terminal interface."""
+    run_tui(_state(ctx).workspace)
+
+
+@app.command("overview")
+def overview(ctx: typer.Context) -> None:
+    """Summarize GTD, Knowledge, and managed projects through public services."""
+
+    report = WorkspaceOperations(open_workspace(_state(ctx).workspace)).overview()
+    _emit(ctx, report)
+
+
+@workspace_app.command("export")
+def workspace_export(
+    ctx: typer.Context,
+    destination: Annotated[Path, typer.Argument(help="Destination ZIP archive.")],
+) -> None:
+    """Create a checksummed archive without caches, locks, or credentials."""
+
+    report = WorkspaceOperations(open_workspace(_state(ctx).workspace)).backup(destination)
+    _emit(ctx, report)
+
+
+@workspace_app.command("import")
+def workspace_import(
+    ctx: typer.Context,
+    source: Annotated[Path, typer.Argument(help="Source ZIP archive.")],
+) -> None:
+    """Restore a verified archive into an empty --workspace directory."""
+
+    try:
+        report = WorkspaceOperations.restore(source, _state(ctx).workspace)
+    except WorkSmarterError as exc:
+        raise typer.BadParameter(str(exc), param_hint="SOURCE") from exc
+    _emit(ctx, report)
+
+
+@workspace_app.command("migrate")
+def workspace_migrate(ctx: typer.Context) -> None:
+    """Validate and rewrite every document using its current public schema."""
+
+    report = WorkspaceOperations(open_workspace(_state(ctx).workspace)).migrate()
+    _emit(ctx, report)
 
 
 @dataclass(slots=True)

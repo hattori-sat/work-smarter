@@ -7,7 +7,9 @@ Work Smarterは、個人の業務を頭の外へ出し、いま実行する1件�
 1. root [README](../../README.md) の手順でinstallとworkspace初期化を行う。
 2. [GTD workflow](gtd-workflow.md) に従い、captureとquick-addを使い分ける。
 3. 重要な業務は [Task tickets](task-tickets.md) でgoalと完了条件を定義する。
-4. Markdownを直接編集する場合は [Workspace guide](workspace.md) を確認する。
+4. 再利用する情報は [Knowledge guide](knowledge.md) に従い、GTDとは別のnoteへ育てる。
+5. Markdownを直接編集する場合は [Workspace guide](workspace.md) を確認する。
+6. 管理プロジェクトは [Project management](project-management.md)、Confluence公開は [Confluence](confluence.md)、VS Code導線は [VS Code](vscode.md) を参照する。
 
 ## Mental model
 
@@ -18,6 +20,10 @@ Work Smarterは、個人の業務を頭の外へ出し、いま実行する1件�
 - Scheduled: その日時でなければ意味がないもの
 - Someday/Maybe: commitmentしていない候補
 - Reference/Knowledge: 行動を要求しない再利用可能な情報
+
+GTDの`reference` dispositionはInboxを行動不要として整理した記録です。独立Knowledge noteは
+`knowledge/notes/`でtype、tag、alias、source、linkを管理します。後から検索・再利用したい情報には
+[Knowledge feature](knowledge.md)を使います。
 
 Work Smarterはpriorityの数字だけで次の行動を決めません。context、使える時間、energy、期限、
 commitment、依存関係から「いま実行可能か」を先に判定します。

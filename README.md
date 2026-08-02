@@ -1,9 +1,10 @@
 # Work Smarter
 
-Markdownを正本にし、事務作業をシステムへ押しつける、エンジニア個人向けのGTDツールです。
+Markdownを正本にし、事務作業をシステムへ押しつける、エンジニア個人向けのGTD・Knowledge
+managementツールです。
 
-現在の `0.1.0` はGTD MVPです。プロジェクトマネジメント、User Story Mapping、TBP、
-Confluence同期は、GTDとは別featureとして後から追加できる境界だけを用意しています。
+現在の `0.1.0` はGTD workflow、独立Knowledge、managed project、Confluence publishingを
+実装しています。User Story MappingとTBPは、既存featureとは別に追加できる境界だけを用意しています。
 
 ## いまできること
 
@@ -18,6 +19,10 @@ Confluence同期は、GTDとは別featureとして後から追加できる境界
 - waiting / blocked / scheduledからreadyへの復帰
 - 日次status、週次review、workspace doctor、実績metrics
 - 1 task = 1 Markdown、YAML frontmatter、append-only JSONL監査ログ
+- 1 Knowledge note = 1 Markdown、用途別template、tag、alias、source
+- workspace entityへの明示的link、導出backlink、title/tag/body/alias検索
+- GTD taskやInbox itemなど既存recordからKnowledgeへのidempotentなpromotion
+- orphan・broken・duplicate・ambiguous linkを検査するKnowledge doctor
 - CLIと、VS Code clientから利用できる型付きHTTP API
 
 ## セットアップ
@@ -106,6 +111,39 @@ ws metrics
 
 すべてのIDは一意なprefixまで短縮できます。自動化では全commandに `--json` を付けられます。
 
+## Knowledgeを再利用可能にする
+
+Knowledgeはtask statusや期限を持たず、GTDとは独立して管理します。typeを指定して作成すると、用途別の
+Markdown templateが入ります。
+
+```bash
+ws knowledge add "Release判断" \
+  --type decision \
+  --tag release \
+  --alias ship-plan \
+  --source url=https://example.com/runbook
+ws knowledge show ship-plan
+ws knowledge search "release" --field tag
+```
+
+Knowledge同士、またはtaskなど他のworkspace entityへstable IDでlinkできます。
+
+```bash
+ws knowledge link KN-NOTES TASK-20260723 --type supports
+ws knowledge backlinks TASK-20260723
+```
+
+既存の業務記録をKnowledgeへ昇格する場合、元recordのbodyをcopyし、source IDを残します。同じsourceを
+再度promoteしてもnoteは増えません。
+
+```bash
+ws knowledge promote TASK-20260723 --type reference --tag investigation
+ws knowledge doctor
+```
+
+詳しい操作、link/sourceの意味、現在の検索制限は
+[Knowledge guide](docs/user/knowledge.md)を参照してください。
+
 ## データ構造
 
 ```text
@@ -115,9 +153,10 @@ my-workspace/
 ├── gtd/projects/          GTD上のoutcome
 ├── someday/
 ├── knowledge/gtd/         GTDからreference化した文書
-├── knowledge/             自由なknowledge文書を置ける領域
+├── knowledge/notes/       独立Knowledge note
 ├── archive/inbox/         clarify前の原文とdisposition
 ├── templates/gtd/         user編集可能なbody template
+├── templates/knowledge/   note type別のbody template
 └── .work-smarter/
     ├── config.yml
     ├── events.ndjson      timer・遷移・reviewの監査履歴
@@ -125,11 +164,11 @@ my-workspace/
 ```
 
 taskの状態・関連・日付などはfrontmatter、意図・メモ・結果は本文です。直接編集も正式な使い方ですが、
-編集後は `ws doctor` でschema、ID、配置、関連、WIPを検証してください。詳細は
+編集後は `ws doctor` でworkspace/GTDを、`ws knowledge doctor`でKnowledge graphを検証してください。詳細は
 [workspace format](docs/reference/workspace-format.md)にあります。
 
-`templates/gtd/task.md` と `templates/gtd/project.md` は自由に変更できます。次回 `init` でも
-上書きされません。
+`templates/gtd/` と `templates/knowledge/` のbody templateは自由に変更できます。次回 `init` でも
+既存fileは上書きされません。
 
 ## ローカルAPI
 
@@ -141,6 +180,7 @@ ws serve --host 127.0.0.1 --port 8765
 - interactive docs: `http://127.0.0.1:8765/docs`
 - health: `GET /health`
 - GTD: `/api/gtd/*`
+- Knowledge: `/api/knowledge/*`
 
 APIとCLIは同じapplication serviceを呼ぶため、VS Code extensionが独自に状態遷移を再実装する必要は
 ありません。APIは初期状態でlocalhostにだけbindします。
@@ -151,7 +191,8 @@ GTD projectは「複数actionが必要な望ましいoutcome」です。WBS、�
 review gateを持つmanaged projectではありません。後者は
 `work_smarter.project_management` featureへ実装し、GTD state machineには混ぜません。
 
-同じ方針でUser Story Mapping、issue-driven TBP、Confluence publishingも独立featureにします。
+同じ方針でKnowledgeは`work_smarter.knowledge`として既に分離されています。User Story Mapping、
+issue-driven TBP、Confluence publishingも独立featureにします。
 storageはfeatureが登録するentity codecだけを知り、GTD modelをimportしません。設計判断は
 [ADR 0001](docs/architecture/0001-text-first-modular-monolith.md)と
 [ADR 0002](docs/architecture/0002-feature-contract.md)にあります。
