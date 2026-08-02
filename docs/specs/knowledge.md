@@ -30,6 +30,7 @@ source、stable-ID link、backlink、検索から再発見できるようにす�
 - fresh workspaceは`gtd`と`knowledge`を有効にする。既存configのfeature listは暗黙変更しない。
 - current searchは永続indexを持たず、note集合をcase-insensitive substring scanする。
 - Marp presentationはKnowledge revisionから再生成できるread-only projectionである。
+- HTML previewはoptional `MarpCompiler` Portの出力であり、Knowledge正本ではない。
 
 ## Inferences
 
@@ -180,6 +181,7 @@ HTTPは次のtyped routeを持つ。
 | promote | `POST /api/knowledge/records/{record_id}/promote` |
 | doctor | `GET /api/knowledge/doctor` |
 | Marp presentation | `GET /api/knowledge/notes/{id}/presentations/marp` |
+| Marp HTML preview | `GET /api/knowledge/notes/{id}/presentations/marp/html` |
 
 Request modelはunknown fieldを拒否し、OpenAPI responseは`KnowledgeDocument`などのpublic Pydantic modelで型付け
 する。missing entityは404、Knowledge domain conflict/link errorは400へmappingする。
@@ -191,4 +193,4 @@ Request modelはunknown fieldを拒否し、OpenAPI responseは`KnowledgeDocumen
 - full-text/semantic index、ranking、graph visualization
 - multi-user permission、remote collaboration、merge conflict resolution
 - automatic taxonomy、automatic link suggestion
-- MarpからPDF、PPTX、HTMLへのbinary compile、custom theme asset管理
+- MarpからPDF、PPTX、imageへのbinary compile、custom theme asset管理

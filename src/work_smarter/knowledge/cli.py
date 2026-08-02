@@ -10,6 +10,7 @@ import typer
 from pydantic import BaseModel, ValidationError
 
 from work_smarter.errors import EntityNotFoundError
+from work_smarter.knowledge.marp import MarpCliCompiler
 from work_smarter.knowledge.models import (
     KnowledgeDocument,
     KnowledgeLink,
@@ -17,6 +18,7 @@ from work_smarter.knowledge.models import (
     KnowledgeNoteType,
     KnowledgePresentationMode,
     KnowledgeSearchField,
+    MarpPresentationFormat,
     SourceReference,
     SourceReferenceKind,
 )
@@ -221,33 +223,51 @@ def render_presentation(
     ] = True,
     output: Annotated[
         Path | None,
-        typer.Option("--output", "-o", help="Write a .marp.md projection."),
+        typer.Option("--output", "-o", help="Write the rendered presentation to a file."),
     ] = None,
+    output_format: Annotated[
+        MarpPresentationFormat,
+        typer.Option("--format", case_sensitive=False, help="Render Markdown or HTML."),
+    ] = MarpPresentationFormat.MARKDOWN,
     force: Annotated[bool, typer.Option(help="Replace an existing output file.")] = False,
 ) -> None:
     """Render a technical-report deck from an immutable Knowledge revision."""
 
     try:
-        presentation = _service(ctx).render_presentation(
-            note_id,
-            mode=mode,
-            theme=theme,
-            paginate=paginate,
-        )
+        service = _service(ctx)
+        if output_format is MarpPresentationFormat.HTML:
+            rendered = service.render_html_presentation(
+                note_id,
+                compiler=MarpCliCompiler.from_environment(),
+                mode=mode,
+                theme=theme,
+                paginate=paginate,
+            )
+            content = rendered.html
+        else:
+            rendered = service.render_presentation(
+                note_id,
+                mode=mode,
+                theme=theme,
+                paginate=paginate,
+            )
+            content = rendered.markdown
     except ValidationError as exc:
+        if not any(error["loc"] == ("theme",) for error in exc.errors()):
+            raise
         raise typer.BadParameter(
             "must start with an alphanumeric character and contain only letters, "
             "numbers, '.', '_', or '-' (maximum 64 characters)",
             param_hint="--theme",
         ) from exc
     if output is not None:
-        _write_projection(output, presentation.markdown, force=force)
+        _write_projection(output, content, force=force)
     if _state(ctx).json_output:
-        _emit_json(presentation)
+        _emit_json(rendered)
     elif output is not None:
         typer.echo(str(output))
     else:
-        typer.echo(presentation.markdown, nl=False)
+        typer.echo(content, nl=False)
 
 
 @app.command("add")

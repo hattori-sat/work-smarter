@@ -186,11 +186,33 @@ ws knowledge presentation render ship-plan \
 ```
 
 生成された`.marp.md`にはsource IDとrevisionが入り、元のKnowledge fileや監査eventは変更されません。
-Work SmarterはMarp compilerを同梱しないため、previewやPDF/PPTX/HTML化にはMarp対応editorまたはCLIを別途
-使用します。APIからは次のread-only routeで同じprojectionを取得できます。
+Work SmarterはMarp CLIを同梱・暗黙downloadしません。HTML previewを使う場合はMarp CLIをinstallし、
+`marp`をPATHへ置きます。別の場所にある場合は単一のexecutable pathを設定します。
+
+```bash
+npm install -g @marp-team/marp-cli
+# または: brew install marp-cli
+
+export WORK_SMARTER_MARP_CLI=/path/to/marp
+```
+
+HTML fileへrenderするとbrowserで実際のtheme、pagination、slide navigationを確認できます。
+
+```bash
+ws knowledge presentation render KN-12AB \
+  --format html \
+  --output adapter-rollout.html
+```
+
+`--json`と`--format html`を組み合わせるとsource metadataとHTMLをJSONで返します。Marp CLIがない場合は
+installまたは`WORK_SMARTER_MARP_CLI`設定を案内するerrorになります。command argumentを環境変数へ含めることは
+できません。
+
+APIからは次のread-only routeを使用します。最初はJSONのMarp projection、2番目はbrowserで直接開けるHTMLです。
 
 ```text
 GET /api/knowledge/notes/{id}/presentations/marp?theme=default&paginate=true
+GET /api/knowledge/notes/{id}/presentations/marp/html?theme=default&paginate=true
 ```
 
 ## Current limits
@@ -199,5 +221,5 @@ GET /api/knowledge/notes/{id}/presentations/marp?theme=default&paginate=true
 - 添付ファイルのcopy、version管理、content extractionは行わない。
 - promotion後の双方向同期は行わない。
 - Confluence push/pullとprovider mappingはKnowledgeではなく、後続のpublishing featureで扱う。
-- MarpからPDF/PPTX/HTMLへのcompileとcustom theme asset管理は行わない。
+- MarpからPDF/PPTX/imageへのcompileとcustom theme asset管理は行わない。
 - graph visualization、automatic link suggestion、semantic/embedding searchは未実装。

@@ -55,6 +55,9 @@ from work_smarter.gtd.models import (
 )
 from work_smarter.gtd.service import GtdService
 from work_smarter.knowledge.api import create_knowledge_router
+from work_smarter.knowledge.errors import MarpCompilerUnavailableError
+from work_smarter.knowledge.marp import MarpCliCompiler
+from work_smarter.knowledge.presentations import MarpCompiler
 from work_smarter.knowledge.service import KnowledgeService
 from work_smarter.project_management.api import create_project_management_router
 from work_smarter.project_management.errors import (
@@ -625,6 +628,7 @@ def create_app(
     workspace_path: Path | str | None = None,
     *,
     database_registry: DatabaseBackendRegistry | None = None,
+    marp_compiler: MarpCompiler | None = None,
 ) -> FastAPI:
     """Create an isolated application for a configured local workspace."""
 
@@ -634,6 +638,7 @@ def create_app(
         .resolve()
     )
     database = configured_database(configured, database_registry=database_registry)
+    presentation_compiler = marp_compiler or MarpCliCompiler.from_environment()
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -655,6 +660,9 @@ def create_app(
     def get_knowledge_service(request: Request) -> KnowledgeService:
         return KnowledgeService(open_composed_workspace(request.app.state.workspace_path))
 
+    def get_marp_compiler() -> MarpCompiler:
+        return presentation_compiler
+
     def get_project_management_service(request: Request) -> ProjectManagementService:
         return ProjectManagementService(open_composed_workspace(request.app.state.workspace_path))
 
@@ -663,6 +671,8 @@ def create_app(
         status_code = 400
         if isinstance(exc, (EntityNotFoundError, ProjectItemNotFoundError)):
             status_code = 404
+        elif isinstance(exc, MarpCompilerUnavailableError):
+            status_code = 503
         elif isinstance(
             exc,
             (
@@ -712,7 +722,7 @@ def create_app(
         )
 
     app.include_router(create_gtd_router(get_service))
-    app.include_router(create_knowledge_router(get_knowledge_service))
+    app.include_router(create_knowledge_router(get_knowledge_service, get_marp_compiler))
     app.include_router(create_project_management_router(get_project_management_service))
     return app
 

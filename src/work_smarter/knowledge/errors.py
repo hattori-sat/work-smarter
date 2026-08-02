@@ -21,9 +21,19 @@ class KnowledgeImportError(KnowledgeError):
     """Raised when a generic workspace record cannot be promoted."""
 
 
+class MarpCompilerUnavailableError(KnowledgeError):
+    """Raised when HTML preview is requested without an available compiler."""
+
+
+class MarpCompilationError(KnowledgeError):
+    """Raised when the configured Marp compiler refuses a presentation."""
+
+
 __all__ = [
     "KnowledgeConflictError",
     "KnowledgeError",
     "KnowledgeImportError",
     "KnowledgeLinkError",
+    "MarpCompilationError",
+    "MarpCompilerUnavailableError",
 ]

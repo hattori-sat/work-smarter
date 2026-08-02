@@ -3,14 +3,24 @@
 from __future__ import annotations
 
 import re
+from typing import Protocol
 
 from work_smarter.knowledge.models import (
     KnowledgeDocument,
     KnowledgePresentationMode,
+    MarpHtmlPresentation,
     MarpPresentation,
 )
 
 _FENCE = re.compile(r"^ {0,3}(?P<marker>`{3,}|~{3,})")
+
+
+class MarpCompiler(Protocol):
+    """Port implemented by an optional Marp rendering runtime."""
+
+    def compile_html(self, presentation: MarpPresentation) -> str:
+        """Compile one validated Marp projection into standalone HTML."""
+        ...
 
 
 def _one_line(value: str) -> str:
@@ -88,4 +98,21 @@ def render_marp_presentation(
     return presentation.model_copy(update={"markdown": markdown})
 
 
-__all__ = ["render_marp_presentation"]
+def render_marp_html(
+    presentation: MarpPresentation,
+    *,
+    compiler: MarpCompiler,
+) -> MarpHtmlPresentation:
+    """Compile a Marp projection through an explicitly supplied adapter."""
+
+    return MarpHtmlPresentation(
+        source_id=presentation.source_id,
+        source_revision=presentation.source_revision,
+        mode=presentation.mode,
+        theme=presentation.theme,
+        paginate=presentation.paginate,
+        html=compiler.compile_html(presentation),
+    )
+
+
+__all__ = ["MarpCompiler", "render_marp_html", "render_marp_presentation"]

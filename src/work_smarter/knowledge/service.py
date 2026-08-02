@@ -35,12 +35,17 @@ from work_smarter.knowledge.models import (
     KnowledgePresentationMode,
     KnowledgeSearchField,
     KnowledgeSearchHit,
+    MarpHtmlPresentation,
     MarpPresentation,
     SourceReference,
     SourceReferenceKind,
     utc_now,
 )
-from work_smarter.knowledge.presentations import render_marp_presentation
+from work_smarter.knowledge.presentations import (
+    MarpCompiler,
+    render_marp_html,
+    render_marp_presentation,
+)
 from work_smarter.knowledge.templates import render_knowledge_template
 from work_smarter.storage.events import Event, EventStore
 from work_smarter.storage.workspace import EntityRecord, Workspace
@@ -274,6 +279,25 @@ class KnowledgeService:
             theme=theme,
             paginate=paginate,
         )
+
+    def render_html_presentation(
+        self,
+        query: str,
+        *,
+        compiler: MarpCompiler,
+        mode: KnowledgePresentationMode | str = KnowledgePresentationMode.TECHNICAL_REPORT,
+        theme: str = "default",
+        paginate: bool = True,
+    ) -> MarpHtmlPresentation:
+        """Compile one read-only Marp projection into browser-ready HTML."""
+
+        presentation = self.render_presentation(
+            query,
+            mode=mode,
+            theme=theme,
+            paginate=paginate,
+        )
+        return render_marp_html(presentation, compiler=compiler)
 
     def list(
         self,

@@ -25,6 +25,7 @@ other feature ── generic EntityRecord / stable ID ──► promote or link
 - `knowledge/persistence.py`: `knowledge_note` codecと`knowledge/notes/` ownership
 - `knowledge/templates.py`: type別のuser-overridable body template
 - `knowledge/presentations.py`: Knowledge revisionからのread-only Marp projection
+- `knowledge/marp.py`: optional Marp CLI compiler adapter
 - `knowledge/events.py`: Knowledgeが所有するstable event names
 - `knowledge/errors.py`: adapterが公開できるdomain error
 - `knowledge/cli.py`: root CLI stateを利用するkeyboard/script adapter
@@ -116,8 +117,20 @@ Knowledge Markdown (authority)
 
 rendererはsource file、revision、event storeを変更してはならない。Marp YAMLへ入るthemeはpublic modelで
 検証してから補間し、source titleはYAML frontmatterへ入れない。level-two headingだけをslide boundaryへ変換し、
-それ以外の本文は保持する。PDF/PPTX/HTML compilerはoptional consumerであり、Knowledge packageからNode.jsや
-Marp CLIを起動しない。詳細は[ADR 0005](../architecture/0005-marp-technical-reports-as-projections.md)を参照する。
+それ以外の本文は保持する。
+
+HTML previewは`MarpCompiler` Portを介してcompileする。Application serviceはcompilerを引数で受け、CLI/APIの
+compositionが`MarpCliCompiler`を渡す。adapterは次のsecurity contractを守る。
+
+- executableはserver/process設定で選び、HTTP requestから受け取らない。
+- `subprocess.run()`へargument listを渡し、shell expansionを使わない。
+- isolated temporary directoryとtimeoutを使い、出力fileの存在とnonblankを検証する。
+- raw HTMLとlocal file accessを有効化するMarp CLI optionを暗黙追加しない。
+- missing executable、timeout、non-zero exit、missing outputをtyped errorへ変換する。
+
+`WORK_SMARTER_MARP_CLI`は単一のexecutable名またはpathであり、argumentを含むshell commandではない。
+PDF/PPTX/image compilerはbrowser runtimeを必要とするためこのsliceでは扱わない。詳細は
+[ADR 0005](../architecture/0005-marp-technical-reports-as-projections.md)を参照する。
 
 ## Promotion rules
 
@@ -152,6 +165,7 @@ publishing/import contractとして、remote identity、version、conflict polic
 - doctor orphan/source-connected/broken/duplicate graph
 - CLI JSON purityとHTTP/OpenAPI typing/error mapping
 - Marp slide boundary、source revision、read-only behavior、unsafe theme、output overwrite refusal
+- fake Marp compiler、fixed argument、HTML media type、missing/failing compiler error
 - package import boundaryとfeature composition
 
 ```bash
@@ -164,6 +178,6 @@ publishing/import contractとして、remote identity、version、conflict polic
 
 ## Current non-goals
 
-Confluence conversion/sync、Marp binary compile、binary attachment、semantic index、multi-user collaborationは
-このpackageへ実装しない。
+Confluence conversion/sync、Marp PDF/PPTX/image compile、binary attachment、semantic index、
+multi-user collaborationはこのpackageへ実装しない。
 それらはpublic Knowledge contractを利用する別feature/projectionとする。

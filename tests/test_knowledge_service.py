@@ -19,10 +19,12 @@ from work_smarter.knowledge.models import (
     KnowledgeNoteType,
     KnowledgePresentationMode,
     KnowledgeSearchField,
+    MarpPresentation,
     SourceReference,
     SourceReferenceKind,
 )
 from work_smarter.knowledge.persistence import KNOWLEDGE_ENTITY_SPECS
+from work_smarter.knowledge.presentations import MarpCompiler
 from work_smarter.knowledge.service import KnowledgeService
 from work_smarter.knowledge.templates import (
     initialize_knowledge_templates,
@@ -170,6 +172,37 @@ def test_marp_projection_rejects_unsafe_theme_without_side_effects(
     with pytest.raises(ValidationError, match="theme"):
         knowledge.render_presentation(created.note.id, theme="default\npaginate: false")
 
+    assert knowledge_workspace.event_store.read_all() == events_before
+
+
+def test_html_preview_compiles_projection_without_mutating_knowledge(
+    knowledge: KnowledgeService,
+    knowledge_workspace: Workspace,
+) -> None:
+    class FakeCompiler(MarpCompiler):
+        def compile_html(self, presentation: MarpPresentation) -> str:
+            return f"<!doctype html><title>{presentation.source_id}</title>"
+
+    created = knowledge.create(
+        title="HTML preview",
+        note_type=KnowledgeNoteType.TECHNICAL_REPORT,
+        body="## Outcome\n\nPreviewed.\n",
+    )
+    source_path = knowledge_workspace.root / created.path
+    source_before = source_path.read_bytes()
+    events_before = knowledge_workspace.event_store.read_all()
+
+    rendered = knowledge.render_html_presentation(
+        created.note.id[:12],
+        compiler=FakeCompiler(),
+    )
+
+    assert rendered.source_id == created.note.id
+    assert rendered.source_revision == 1
+    assert rendered.media_type == "text/html"
+    assert rendered.file_extension == ".html"
+    assert rendered.html.startswith("<!doctype html>")
+    assert source_path.read_bytes() == source_before
     assert knowledge_workspace.event_store.read_all() == events_before
 
 

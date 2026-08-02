@@ -219,6 +219,9 @@ Follow-up slices:
 - [x] typed FastAPI/OpenAPI endpoint
 - [x] YAML injectionを防ぐtheme validation
 - [x] source Markdownと監査eventを変更しないacceptance test
+- [x] optional Marp CLI adapterによるbrowser-ready HTML preview
+- [x] fixed subprocess argument、timeout、missing/failure typed error
+- [x] `--format html` CLIと`text/html` FastAPI route
 - [x] ADR 0005、user/developer/spec/reference documentation
 
 ## Definition of Done for every slice

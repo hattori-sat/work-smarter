@@ -16,6 +16,7 @@ Knowledge本文と、発表用のslide区切り・theme・paginationを別の責
 3. 生成結果はsource IDとrevisionを持ち、どの正本から作られたか追跡できる。
 4. renderはKnowledge Markdown、revision、監査eventを変更しない。
 5. Marp固有runtimeをcore dependencyにせず、`.marp.md`を任意のMarp環境で利用できる。
+6. optional Marp CLI adapterが同じprojectionをbrowser-ready HTMLへcompileできる。
 
 ## Facts
 
@@ -56,7 +57,14 @@ presentation固有設定を出力へ閉じ込められる。slideごとの大幅
 7. CLI contractは`ws knowledge presentation render <id>`とし、stdoutまたは明示した`--output`へ出力する。
    既存fileは`--force`なしで上書きしない。`--json`は型付きprojectionだけをstdoutへ返す。
 8. HTTP contractは`GET /api/knowledge/notes/{id}/presentations/marp`とする。renderは副作用を持たない。
-9. Marp compiler、Node.js、browser automationをcore dependencyへ追加しない。
+9. HTML compileは`MarpCompiler` Portを介し、built-in adapterはMarp CLI executableだけを固定引数で起動する。
+10. executableは`WORK_SMARTER_MARP_CLI`または既定の`marp`からserver起動側が選ぶ。HTTP requestから
+    command、argument、config fileを指定させない。
+11. adapterはshellを使わず、isolated temporary directory、30秒timeout、固定`--output`引数で実行する。
+    raw HTMLを許可する`--html`とlocal file accessを許可する`--allow-local-files`は渡さない。
+12. CLIは`--format html`でHTMLをstdout/file/JSONへ返す。FastAPIの`.../marp/html` routeは
+    `text/html`を返し、browserから直接確認できる。
+13. Marp CLI、Node.js、browser automationをcore dependencyへ追加せず、toolを暗黙downloadしない。
 
 ## Verification plan
 
@@ -64,6 +72,8 @@ presentation固有設定を出力へ閉じ込められる。slideごとの大幅
 - level-two headingがslideになり、source ID/revisionが出力へ残ること。
 - unsafe themeを拒否し、sourceとevent countが変わらないこと。
 - CLIのJSON purity、file overwrite refusal、FastAPI/OpenAPIのresponse typingを確認すること。
+- fake executableで固定argument、shell non-expansion、missing/failure/timeout boundaryを確認すること。
+- HTML previewが`text/html`で返り、sourceとeventを変更しないこと。
 - 全Knowledge testsと全repository testsを実行すること。
 
 ## Consequences
@@ -71,7 +81,9 @@ presentation固有設定を出力へ閉じ込められる。slideごとの大幅
 - `.marp.md`は配布可能なartifactだが正本ではなく、いつでも再生成できる。
 - `technical_report` noteは本文を直接編集し、presentationを再renderする。
 - theme CSSやimage assetの可搬性は利用側Marp環境の責任になる。
-- PDF/PPTX/HTMLへのcompile失敗をWork Smarterが監査eventとして扱うことは現時点ではない。
+- HTML compileにはMarp CLIのinstallが必要で、未導入時はtyped unavailable errorになる。
+- HTML compile失敗をWork Smarterが監査eventとして扱うことは現時点ではない。
+- PDF/PPTX/imageはbrowser runtimeを必要とするため、このsliceでは扱わない。
 
 ## Unknowns
 
