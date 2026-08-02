@@ -40,7 +40,8 @@ API、CLI、backup、rollbackを検証できる。
 3番目の段階移行を採用する。
 
 1. Local Application ServerはFastAPIを使用し、初期値ではloopback interfaceだけへbindする。
-2. SQLite databaseは`.work-smarter/work-smarter.db`へ置き、forward-only migrationで管理する。
+2. 初期Database adapterはSQLiteとし、`.work-smarter/work-smarter.db`をforward-only migrationで管理する。
+   Backend選択とadapter境界はADR 0004に従う。
 3. Databaseは構造化state、relation、time entry、activity event、outbox、provider mappingの正本とする。
 4. Markdownは意図、背景、作業メモ、結果等のnarrative documentの正本とする。
 5. 同一fieldをDatabaseとMarkdownの双方から編集可能にしない。Markdownへ構造化fieldを表示する場合は
@@ -58,6 +59,7 @@ API、CLI、backup、rollbackを検証できる。
 
 - SQLite schema v1はmigration metadata、append-only `activity_events`、`outbox_items`を提供する。
 - Workspace初期化とFastAPI lifecycleがschemaを最新化する。
+- Workspace backupはSQLite backup APIでonline snapshotを作り、restore前にDatabase integrityを検証する。
 - 既存GTD、Knowledge、Managed Projectのentity stateはまだMarkdown、historyはJSONLが正本である。
 - DB tablesへlegacy eventを二重書込みしない。各domainの切替sliceで一度だけownershipを移す。
 
@@ -65,8 +67,8 @@ API、CLI、backup、rollbackを検証できる。
 
 - 既存workspaceを読みながらdomain単位で移行できる。
 - 移行期間中は正本の所在をdomainごとに文書化する必要がある。
-- DatabaseとMarkdownを含む整合backupが必要になる。raw SQLite fileのcopy方式はserver稼働中には
-  不十分であり、SQLite backup APIを用いるsliceが必要である。
+- DatabaseとMarkdownを含むbackupではraw SQLite fileをcopyせず、SQLite backup APIを使用する。
+- SQL statementはstatic literalとし、外部値はparameter bindingする。動的identifierは許可しない。
 - Remote bindはauthenticationと明示configurationのADRが決まるまで拒否する。
 - CLI全操作のHTTP client化、operation journal、domain schema、outbox workerは未実装である。
 

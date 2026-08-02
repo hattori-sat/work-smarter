@@ -181,13 +181,31 @@ main
 
 Follow-up slices:
 
-- [ ] SQLite snapshotを含む整合backup/restore
+- [x] SQLite snapshotを含む整合backup/restore (`feat/sqlite-backup`)
 - [ ] domain単位のDatabase source-of-truth移行
 - [ ] CLI domain/resource/operation treeとHTTP client化
 - [ ] operation journalとoutbox worker
 
 移行中の正本境界、比較案、未確認事項は
 `docs/architecture/0003-hybrid-source-of-truth-and-local-application-server.md`を参照する。
+
+### M9 SQLite backup and SQL safety — `feat/sqlite-backup`
+
+- Current branch: `feat/sqlite-backup`
+- Status: COMPLETE
+
+- [x] SQLite backup APIによるonline snapshot
+- [x] WAL transactionを含むbackup/restore acceptance
+- [x] `-wal`、`-shm`、`-journal`のarchive除外
+- [x] restore展開前のSQLite integrity/schema検証
+- [x] parameter bindingでSQL injection payloadをdataとして保存
+- [x] dynamic SQL interpolationを拒否するarchitecture test
+- [x] provider-neutral Database Portとbackend registry
+- [x] workspace設定によるbackend/location選択
+- [x] backend metadata付きbackup/restore contract
+- [x] fake non-SQLite adapterによる初期化・FastAPI・backup/restore acceptance
+- [x] SQLite driver importのadapter内隔離
+- [x] user/developer documentation
 
 ## Definition of Done for every slice
 

@@ -23,6 +23,7 @@ from work_smarter.errors import (
     InvalidDocumentError,
     WorkspaceNotInitializedError,
 )
+from work_smarter.shared.persistence.database import DatabaseConfiguration
 from work_smarter.storage.events import EventStore
 from work_smarter.storage.frontmatter import read_markdown, write_markdown
 
@@ -42,6 +43,7 @@ class WorkspaceSettings(BaseModel):
     wip_limit: Literal[1] = 1
     stale_after_days: int = Field(default=14, ge=1)
     timezone: str = "UTC"
+    database: DatabaseConfiguration = Field(default_factory=DatabaseConfiguration)
 
     @field_validator("timezone")
     @classmethod

@@ -118,6 +118,7 @@ def test_fresh_workspace_config_matches_initialized_features(tmp_path: Path) -> 
     composed = compose_features(settings.features)
 
     assert settings.features == ["gtd", "knowledge", "project-management"]
+    assert settings.database.backend == "sqlite"
     assert {spec.kind for spec in workspace.registry.specs} == {
         spec.kind for spec in composed.entity_registry().specs
     }

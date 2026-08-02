@@ -2,10 +2,15 @@
 
 ## Authority
 
-- entityの現在状態: Markdown + YAML frontmatter
-- 操作・timer・reviewの履歴: `.work-smarter/events.ndjson`
+- 現行domain entityの現在状態: Markdown + YAML frontmatter
+- 現行domainの操作・timer・review履歴: `.work-smarter/events.ndjson`
 - Knowledge search/backlink: 現在のMarkdownから都度再構築するprojection
-- 将来追加するSQLite/検索index/view: 破棄して再構築できるprojection
+- Application database: workspace configで選択したbackend artifact（初期値はSQLite）
+
+SQLite adapterはmigration metadata、append-only activity event、outbox schemaを持つ。GTD、Knowledge、
+Managed Projectの正本は各domain migrationが完了するまでMarkdown/JSONLであり、曖昧な二重書込みはしない。
+Targetの正本境界は[ADR 0003](../architecture/0003-hybrid-source-of-truth-and-local-application-server.md)
+を参照する。
 
 ## Directory ownership
 
@@ -20,7 +25,7 @@
 | `archive/inbox/` | GTD | raw captureとclarify disposition |
 | `templates/gtd/` | GTD/user | body template |
 | `templates/knowledge/` | Knowledge/user | note type別body template |
-| `.work-smarter/` | core | config、監査event、lock、将来のprovider state |
+| `.work-smarter/` | core | config、監査event、SQLite database、lock、provider state |
 
 `knowledge/gtd/`と`knowledge/notes/`は同じ親directoryにあるが、前者はGTD、後者はKnowledgeが所有する。
 Project management featureは `gtd/projects/` を再利用しない。
@@ -186,3 +191,16 @@ Task schema v1/v2はread時にv3へlazy migrationし、次回writeでv3として
 v2 rigorous taskは新しいassurance gateで読めなくならないよう、frontmatterにgrandfather markerを
 明示する。Knowledgeはschema version 1だけを受け付け、migrationはまだない。その他entityと未対応versionは
 自動推測せずvalidation errorにする。
+
+## Backup representation
+
+`ws workspace export`は選択中adapterで一貫snapshotを作り、backend名とmember pathをmanifestへ記録して
+checksummed archiveへ格納する。SQLiteの`-wal`、`-shm`、`-journal`はruntime sidecarであり、backupへ
+含めない。Restoreは展開前にSHA-256、pathを検査し、manifestに記録された同じadapterでsnapshotを検証する。
+Database設定は次の形で、credentialを含めない。
+
+```yaml
+database:
+  backend: sqlite
+  location: null
+```

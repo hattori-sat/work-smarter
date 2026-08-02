@@ -29,8 +29,9 @@ ws --workspace ./my-workspace --json overview
 
 ## Backup、restore、migration
 
-workspace全体はchecksummed ZIPとしてexportできます。Markdown/YAML、設定、append-only eventを含み、
-再生成可能なcache、lock、`.work-smarter/secrets/`は含みません。
+workspace全体はchecksummed ZIPとしてexportできます。Markdown/YAML、設定、append-only event、
+一貫したSQLite snapshotを含み、再生成可能なcache、lock、SQLite sidecar、
+`.work-smarter/secrets/`は含みません。
 
 ```bash
 ws --workspace ./my-workspace workspace export ./backup.ws.zip
@@ -38,9 +39,25 @@ ws --workspace ./restored workspace import ./backup.ws.zip
 ws --workspace ./restored workspace migrate
 ```
 
-import先は空でなければなりません。importは展開前にmanifest、各fileのSHA-256、archive pathを検査し、
-改ざん・欠落・path traversalを拒否します。`migrate` はworkspace lockを取得し、全documentを現在の
-public schemaで検証・再保存します。migration前には必ずexportしてください。
+import先は空でなければなりません。importは展開前にmanifest、各fileのSHA-256、archive path、
+SQLite integrityとschema versionを検査し、改ざん・欠落・path traversal・破損Databaseを拒否します。
+`migrate` はworkspace lockを取得し、全documentを現在のpublic schemaで検証・再保存します。
+migration前には必ずexportしてください。
+
+## Database backend
+
+初期backendはSQLiteです。Workspaceの`.work-smarter/config.yml`でbackendとnon-secret locationを
+選択できます。
+
+```yaml
+database:
+  backend: sqlite
+  location: .work-smarter/work-smarter.db
+```
+
+Microsoft Access等はadapterを追加すると選択できますが、現在built-inされていません。未導入のbackendを
+指定するとserverは明示的なconfiguration errorを返します。Passwordや接続tokenはconfigへ書かず、
+adapterがenvironmentまたはOS credential storeから取得します。
 
 完全なformat contractはdeveloper reference
 [Workspace format 0.1](../reference/workspace-format.md)にあります。

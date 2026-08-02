@@ -10,7 +10,12 @@ from work_smarter.features import Feature, FeatureRegistry, discover_features
 from work_smarter.gtd import GtdFeature
 from work_smarter.knowledge import KnowledgeFeature
 from work_smarter.project_management import ProjectManagementFeature
-from work_smarter.shared.persistence.database import ApplicationDatabase
+from work_smarter.shared.persistence.database import (
+    DatabaseBackend,
+    DatabaseBackendRegistry,
+    DatabaseConfiguration,
+    create_database_backend,
+)
 from work_smarter.storage.workspace import DEFAULT_WORKSPACE_FEATURES, Workspace
 
 BUILTIN_FEATURES: tuple[type[Feature], ...] = (
@@ -46,7 +51,29 @@ def compose_features(
     return registry
 
 
-def initialize_workspace(root: Path | str) -> Workspace:
+def configured_database(
+    root: Path | str,
+    *,
+    database_registry: DatabaseBackendRegistry | None = None,
+) -> DatabaseBackend:
+    """Resolve the configured database through the provider-neutral registry."""
+
+    probe = Workspace(root)
+    configuration = (
+        probe.settings().database if probe.config_path.is_file() else DatabaseConfiguration()
+    )
+    return create_database_backend(
+        probe.root,
+        configuration,
+        registry=database_registry,
+    )
+
+
+def initialize_workspace(
+    root: Path | str,
+    *,
+    database_registry: DatabaseBackendRegistry | None = None,
+) -> Workspace:
     """Initialize directories for the features enabled by workspace config."""
 
     probe = Workspace(root)
@@ -55,7 +82,10 @@ def initialize_workspace(root: Path | str) -> Workspace:
     )
     composition = compose_features(enabled)
     workspace = Workspace.initialize(root, composition.entity_registry())
-    ApplicationDatabase.for_workspace(workspace.root).migrate()
+    configured_database(
+        workspace.root,
+        database_registry=database_registry,
+    ).migrate()
     for initializer in composition.workspace_initializers:
         initializer(workspace)
     return workspace

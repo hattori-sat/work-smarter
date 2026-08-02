@@ -11,6 +11,7 @@
 
 - [Developer guide](development/README.md)
 - [Hybrid source of truth and local application server ADR](architecture/0003-hybrid-source-of-truth-and-local-application-server.md)
+- [Selectable database adapters ADR](architecture/0004-selectable-database-adapters.md)
 - [Branching and delivery](development/branching.md)
 - [Testing strategy](development/testing.md)
 - [Developing the GTD workflow](development/gtd-workflow.md)

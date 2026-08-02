@@ -14,6 +14,7 @@ def test_api_supports_capture_clarify_focus_and_completion(tmp_path: Path) -> No
         assert health.status_code == 200
         assert health.json()["initialized"] is False
         assert health.json()["database"] == {
+            "backend": "sqlite",
             "initialized": False,
             "schema_version": 0,
             "latest_schema_version": 1,
@@ -21,6 +22,7 @@ def test_api_supports_capture_clarify_focus_and_completion(tmp_path: Path) -> No
 
         initialized = client.post("/api/workspace/init")
         assert initialized.status_code == 201
+        assert initialized.json()["database_backend"] == "sqlite"
         assert initialized.json()["database_schema_version"] == 1
 
         health = client.get("/health")
