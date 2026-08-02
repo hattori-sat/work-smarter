@@ -21,6 +21,7 @@ from work_smarter.knowledge.models import (
     KnowledgeSearchField,
     KnowledgeSearchHit,
     MarpPresentation,
+    MarpPresentationTemplate,
     SourceReference,
     SourceReferenceKind,
 )
@@ -183,6 +184,7 @@ def create_knowledge_router(
     def render_marp(
         note_id: str,
         mode: KnowledgePresentationMode = KnowledgePresentationMode.TECHNICAL_REPORT,
+        template: MarpPresentationTemplate = MarpPresentationTemplate.SCIENTIFIC,
         theme: MarpTheme = "default",
         paginate: bool = True,
         service: KnowledgeService = service_dep,
@@ -190,6 +192,7 @@ def create_knowledge_router(
         return service.render_presentation(
             note_id,
             mode=mode,
+            template=template,
             theme=theme,
             paginate=paginate,
         )
@@ -201,6 +204,7 @@ def create_knowledge_router(
     def render_marp_html_preview(
         note_id: str,
         mode: KnowledgePresentationMode = KnowledgePresentationMode.TECHNICAL_REPORT,
+        template: MarpPresentationTemplate = MarpPresentationTemplate.SCIENTIFIC,
         theme: MarpTheme = "default",
         paginate: bool = True,
         service: KnowledgeService = service_dep,
@@ -210,6 +214,7 @@ def create_knowledge_router(
             note_id,
             compiler=compiler,
             mode=mode,
+            template=template,
             theme=theme,
             paginate=paginate,
         )

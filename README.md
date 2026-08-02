@@ -157,7 +157,7 @@ my-workspace/
 ├── knowledge/notes/       独立Knowledge note
 ├── archive/inbox/         clarify前の原文とdisposition
 ├── templates/gtd/         user編集可能なbody template
-├── templates/knowledge/   note type別のbody template
+├── templates/knowledge/   note type別bodyとMarp visual template
 └── .work-smarter/
     ├── config.yml
     ├── events.ndjson      timer・遷移・reviewの監査履歴
@@ -168,8 +168,9 @@ taskの状態・関連・日付などはfrontmatter、意図・メモ・結果�
 編集後は `ws doctor` でworkspace/GTDを、`ws knowledge doctor`でKnowledge graphを検証してください。詳細は
 [workspace format](docs/reference/workspace-format.md)にあります。
 
-`templates/gtd/` と `templates/knowledge/` のbody templateは自由に変更できます。次回 `init` でも
-既存fileは上書きされません。
+`templates/gtd/` と `templates/knowledge/` のbody template、および
+`templates/knowledge/presentations/scientific.css`は自由に変更できます。次回 `init` でも既存fileは
+上書きされません。
 
 ## ローカルAPI
 

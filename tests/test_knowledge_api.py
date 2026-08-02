@@ -180,6 +180,7 @@ def test_knowledge_api_returns_typed_marp_projection_without_writing_source(
         assert payload["source_id"] == note_id
         assert payload["source_revision"] == 1
         assert payload["mode"] == "technical_report"
+        assert payload["template"] == "scientific"
         assert payload["theme"] == "gaia"
         assert payload["paginate"] is False
         assert "## Outcome" in payload["markdown"]

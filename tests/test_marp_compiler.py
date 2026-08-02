@@ -17,6 +17,7 @@ def _presentation(markdown: str = "---\nmarp: true\n---\n# Report\n") -> MarpPre
         source_id="KN-REPORT",
         source_revision=3,
         theme="default",
+        template="scientific",
         markdown=markdown,
     )
 

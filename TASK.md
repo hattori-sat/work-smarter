@@ -1,6 +1,6 @@
 # Work Smarter v1 — implementation tracker
 
-最終更新: 2026-08-02
+最終更新: 2026-08-03
 
 ## Outcome
 
@@ -218,6 +218,11 @@ Follow-up slices:
 - [x] canonical `ws knowledge presentation render` CLIとsafe overwrite
 - [x] typed FastAPI/OpenAPI endpoint
 - [x] YAML injectionを防ぐtheme validation
+- [x] browser-ready HTML compileとpreview endpoint
+- [x] 科学技術報告向け`scientific` visual template
+- [x] title上端、H1/H2/H3階層、図表中央配置のHTML visual QA
+- [x] workspaceで編集可能かつ再initで上書きしないpresentation CSS
+- [x] CLI/APIのtyped template selection
 - [x] source Markdownと監査eventを変更しないacceptance test
 - [x] optional Marp CLI adapterによるbrowser-ready HTML preview
 - [x] fixed subprocess argument、timeout、missing/failure typed error

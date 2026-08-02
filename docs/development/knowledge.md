@@ -23,7 +23,7 @@ other feature ── generic EntityRecord / stable ID ──► promote or link
 - `knowledge/models.py`: strict public schema、enum、read models
 - `knowledge/service.py`: lock内のcreate/update/promote invariant、query、doctor
 - `knowledge/persistence.py`: `knowledge_note` codecと`knowledge/notes/` ownership
-- `knowledge/templates.py`: type別のuser-overridable body template
+- `knowledge/templates.py`: type別body templateとuser-overridable presentation CSS
 - `knowledge/presentations.py`: Knowledge revisionからのread-only Marp projection
 - `knowledge/marp.py`: optional Marp CLI compiler adapter
 - `knowledge/events.py`: Knowledgeが所有するstable event names
@@ -119,6 +119,12 @@ rendererはsource file、revision、event storeを変更してはならない。
 検証してから補間し、source titleはYAML frontmatterへ入れない。level-two headingだけをslide boundaryへ変換し、
 それ以外の本文は保持する。
 
+visual templateは`MarpPresentationTemplate`のclosed enumで選び、workspaceの
+`templates/knowledge/presentations/<template>.css`から読む。CSSはYAML block scalarの`style`へ2-space indentで
+埋め込むため、生成物は外部のtheme-set設定に依存しない。initializerはmissing CSSだけを作り、user overrideを
+上書きしない。既定`scientific` CSSのdesign根拠は
+[research note](../research/scientific-presentation-template.md)に記録する。
+
 HTML previewは`MarpCompiler` Portを介してcompileする。Application serviceはcompilerを引数で受け、CLI/APIの
 compositionが`MarpCliCompiler`を渡す。adapterは次のsecurity contractを守る。
 
@@ -165,6 +171,7 @@ publishing/import contractとして、remote identity、version、conflict polic
 - doctor orphan/source-connected/broken/duplicate graph
 - CLI JSON purityとHTTP/OpenAPI typing/error mapping
 - Marp slide boundary、source revision、read-only behavior、unsafe theme、output overwrite refusal
+- scientific visual template、user override non-overwrite、CSS block-scalar埋め込み、CLI/API template contract
 - fake Marp compiler、fixed argument、HTML media type、missing/failing compiler error
 - package import boundaryとfeature composition
 
@@ -178,6 +185,6 @@ publishing/import contractとして、remote identity、version、conflict polic
 
 ## Current non-goals
 
-Confluence conversion/sync、Marp PDF/PPTX/image compile、binary attachment、semantic index、
+Confluence conversion/sync、Marp PDF/PPTX/image compile、複数visual template、binary attachment、semantic index、
 multi-user collaborationはこのpackageへ実装しない。
 それらはpublic Knowledge contractを利用する別feature/projectionとする。

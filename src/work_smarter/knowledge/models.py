@@ -54,6 +54,12 @@ class MarpPresentationFormat(StrEnum):
     HTML = "html"
 
 
+class MarpPresentationTemplate(StrEnum):
+    """User-overridable visual templates for Marp projections."""
+
+    SCIENTIFIC = "scientific"
+
+
 class KnowledgeLinkType(StrEnum):
     RELATED_TO = "related_to"
     SUPPORTS = "supports"
@@ -201,6 +207,7 @@ class MarpPresentation(StrictModel):
     source_id: str
     source_revision: int = Field(ge=1)
     mode: KnowledgePresentationMode = KnowledgePresentationMode.TECHNICAL_REPORT
+    template: MarpPresentationTemplate = MarpPresentationTemplate.SCIENTIFIC
     theme: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
     paginate: bool = True
     media_type: Literal["text/markdown"] = "text/markdown"
@@ -219,6 +226,7 @@ class MarpHtmlPresentation(StrictModel):
     source_id: str
     source_revision: int = Field(ge=1)
     mode: KnowledgePresentationMode
+    template: MarpPresentationTemplate
     theme: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
     paginate: bool
     media_type: Literal["text/html"] = "text/html"
@@ -278,6 +286,7 @@ __all__ = [
     "MarpHtmlPresentation",
     "MarpPresentation",
     "MarpPresentationFormat",
+    "MarpPresentationTemplate",
     "SourceReference",
     "SourceReferenceKind",
     "utc_now",

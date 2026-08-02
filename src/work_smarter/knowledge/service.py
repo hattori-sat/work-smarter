@@ -37,6 +37,7 @@ from work_smarter.knowledge.models import (
     KnowledgeSearchHit,
     MarpHtmlPresentation,
     MarpPresentation,
+    MarpPresentationTemplate,
     SourceReference,
     SourceReferenceKind,
     utc_now,
@@ -46,7 +47,7 @@ from work_smarter.knowledge.presentations import (
     render_marp_html,
     render_marp_presentation,
 )
-from work_smarter.knowledge.templates import render_knowledge_template
+from work_smarter.knowledge.templates import render_knowledge_template, render_presentation_template
 from work_smarter.storage.events import Event, EventStore
 from work_smarter.storage.workspace import EntityRecord, Workspace
 
@@ -268,6 +269,7 @@ class KnowledgeService:
         query: str,
         *,
         mode: KnowledgePresentationMode | str = KnowledgePresentationMode.TECHNICAL_REPORT,
+        template: MarpPresentationTemplate | str = MarpPresentationTemplate.SCIENTIFIC,
         theme: str = "default",
         paginate: bool = True,
     ) -> MarpPresentation:
@@ -276,6 +278,8 @@ class KnowledgeService:
         return render_marp_presentation(
             self.get(query),
             mode=mode,
+            template=template,
+            style=render_presentation_template(self.workspace, template),
             theme=theme,
             paginate=paginate,
         )
@@ -286,6 +290,7 @@ class KnowledgeService:
         *,
         compiler: MarpCompiler,
         mode: KnowledgePresentationMode | str = KnowledgePresentationMode.TECHNICAL_REPORT,
+        template: MarpPresentationTemplate | str = MarpPresentationTemplate.SCIENTIFIC,
         theme: str = "default",
         paginate: bool = True,
     ) -> MarpHtmlPresentation:
@@ -294,6 +299,7 @@ class KnowledgeService:
         presentation = self.render_presentation(
             query,
             mode=mode,
+            template=template,
             theme=theme,
             paginate=paginate,
         )

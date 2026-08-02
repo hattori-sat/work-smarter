@@ -10,6 +10,7 @@ from work_smarter.knowledge.models import (
     KnowledgePresentationMode,
     MarpHtmlPresentation,
     MarpPresentation,
+    MarpPresentationTemplate,
 )
 
 _FENCE = re.compile(r"^ {0,3}(?P<marker>`{3,}|~{3,})")
@@ -64,29 +65,36 @@ def render_marp_presentation(
     document: KnowledgeDocument,
     *,
     mode: KnowledgePresentationMode | str = KnowledgePresentationMode.TECHNICAL_REPORT,
+    template: MarpPresentationTemplate | str = MarpPresentationTemplate.SCIENTIFIC,
+    style: str,
     theme: str = "default",
     paginate: bool = True,
 ) -> MarpPresentation:
     """Render a deterministic Marp document without changing its source note."""
 
     requested_mode = KnowledgePresentationMode(mode)
+    requested_template = MarpPresentationTemplate(template)
     # Construct first so untrusted theme text is validated before interpolation into YAML.
     presentation = MarpPresentation(
         source_id=document.note.id,
         source_revision=document.note.revision,
         mode=requested_mode,
+        template=requested_template,
         theme=theme,
         paginate=paginate,
         markdown="pending",
     )
     body_slides = _slides_from_body(document.body)
+    style_lines = ["style: |", *(f"  {line}" for line in style.rstrip().splitlines())]
     lines = [
         "---",
         "marp: true",
         f"theme: {presentation.theme}",
         f"paginate: {str(presentation.paginate).lower()}",
+        *style_lines,
         "---",
         f"<!-- Source: {document.note.id}@{document.note.revision} -->",
+        "<!-- _class: title -->",
         "",
         f"# {_one_line(document.note.title)}",
         "",
@@ -109,6 +117,7 @@ def render_marp_html(
         source_id=presentation.source_id,
         source_revision=presentation.source_revision,
         mode=presentation.mode,
+        template=presentation.template,
         theme=presentation.theme,
         paginate=presentation.paginate,
         html=compiler.compile_html(presentation),

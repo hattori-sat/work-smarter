@@ -17,6 +17,7 @@ Knowledge本文と、発表用のslide区切り・theme・paginationを別の責
 4. renderはKnowledge Markdown、revision、監査eventを変更しない。
 5. Marp固有runtimeをcore dependencyにせず、`.marp.md`を任意のMarp環境で利用できる。
 6. optional Marp CLI adapterが同じprojectionをbrowser-ready HTMLへcompileできる。
+7. 科学技術報告向けの既定visual templateを持ち、title、見出し階層、図表の配置をHTMLで確認できる。
 
 ## Facts
 
@@ -25,6 +26,7 @@ Knowledge本文と、発表用のslide区切り・theme・paginationを別の責
   domain metadataとpresentation metadataが同じfrontmatterを共有する。
 - 同じ技術報告でも、本文の再利用、Confluence公開、slide発表では必要な見せ方が異なる。
 - HTML、PDF、PPTX生成には外部のMarp compilerまたは対応editorが必要である。
+- Marpはdocument frontmatterの`style` directiveで、そのpresentationだけにCSSを適用できる。
 
 ## Considered paths
 
@@ -65,6 +67,14 @@ presentation固有設定を出力へ閉じ込められる。slideごとの大幅
 12. CLIは`--format html`でHTMLをstdout/file/JSONへ返す。FastAPIの`.../marp/html` routeは
     `text/html`を返し、browserから直接確認できる。
 13. Marp CLI、Node.js、browser automationをcore dependencyへ追加せず、toolを暗黙downloadしない。
+14. 既定のvisual templateは`scientific`とし、workspaceの
+    `templates/knowledge/presentations/scientific.css`から読む。`ws init`はmissing fileだけを作り、利用者の
+    編集を上書きしない。
+15. rendererはtemplate CSSをYAML block scalarの`style`へ埋め込み、自己完結した`.marp.md`を生成する。
+    外部theme登録やcompiler固有のconfig fileを要求しない。
+16. `scientific` templateはtitleを上端に置き、H1/H2/H3を44/36/28pxで段階化し、図と表を中央配置する。
+    本文は24px、表は20pxとし、白地、濃い文字、青1色のaccent、余白を基本にする。
+17. CLIの`--template`とHTTPの`template` queryはclosed enumとし、現時点の値は`scientific`だけとする。
 
 ## Verification plan
 
@@ -74,20 +84,23 @@ presentation固有設定を出力へ閉じ込められる。slideごとの大幅
 - CLIのJSON purity、file overwrite refusal、FastAPI/OpenAPIのresponse typingを確認すること。
 - fake executableで固定argument、shell non-expansion、missing/failure/timeout boundaryを確認すること。
 - HTML previewが`text/html`で返り、sourceとeventを変更しないこと。
+- visual templateの初期化、user overrideのnon-overwrite、Marp frontmatterへの埋め込みを確認すること。
+- HTMLを実renderし、titleが上端、H1/H2/H3が44/36/28px、図表のcenter deltaが0pxであることを確認すること。
 - 全Knowledge testsと全repository testsを実行すること。
 
 ## Consequences
 
 - `.marp.md`は配布可能なartifactだが正本ではなく、いつでも再生成できる。
 - `technical_report` noteは本文を直接編集し、presentationを再renderする。
-- theme CSSやimage assetの可搬性は利用側Marp環境の責任になる。
+- visual template CSSはworkspaceで管理され、生成するMarp Markdownへinline化される。image assetの可搬性は
+  利用側Marp環境の責任になる。
 - HTML compileにはMarp CLIのinstallが必要で、未導入時はtyped unavailable errorになる。
 - HTML compile失敗をWork Smarterが監査eventとして扱うことは現時点ではない。
 - PDF/PPTX/imageはbrowser runtimeを必要とするため、このsliceでは扱わない。
 
 ## Unknowns
 
-- custom theme assetをworkspace所有にするかはUNKNOWN。
+- 複数のvisual templateを追加したときの互換性・versioning policyはUNKNOWN。
 - diagram、image、code blockが1 slideを超える場合の自動分割policyはUNKNOWN。
 - speaker notes、multiple audience variant、PDF/PPTX build pipelineをcoreへ持つ必要性はUNKNOWN。
 - Marp出力をConfluenceへpublishするか、Knowledge本文をpublishするかのUI選択方式はUNKNOWN。

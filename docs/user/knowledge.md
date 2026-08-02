@@ -30,7 +30,7 @@ ws init
 | `how_to` | 再現可能な手順 | Goal, Prerequisites, Procedure, Verification |
 | `reference` | 外部資料や調査結果 | Summary, Extracts, Sources |
 | `meeting_note` | 会議記録 | Attendees, Agenda, Notes, Decisions, Actions |
-| `technical_report` | 技術報告と発表 | Executive Summary, Outcome, Evidence, Risks and Unknowns, Next Actions, Sources |
+| `technical_report` | 技術報告と発表 | Executive Summary, Objective, Method, Results, Evidence, Limitations and Unknowns, Conclusion, Next Actions, Sources |
 
 typeを省略すると`note`です。本文を省略すると`templates/knowledge/<type>.md`が使われます。
 
@@ -175,11 +175,13 @@ ws knowledge add "Database adapter移行報告" --type technical_report
 ws knowledge presentation render KN-12AB --output adapter-rollout.marp.md
 ```
 
-既存のKnowledge noteも同じcommandで投影できます。`--theme`、`--no-paginate`を指定でき、既存出力を置換する
-場合だけ`--force`が必要です。
+既存のKnowledge noteも同じcommandで投影できます。既定の`scientific` templateは、titleを上端、図表を中央、
+H1/H2/H3を大・中・小の順に配置します。`--theme`、`--template scientific`、`--no-paginate`を指定でき、
+既存出力を置換する場合だけ`--force`が必要です。
 
 ```bash
 ws knowledge presentation render ship-plan \
+  --template scientific \
   --theme gaia \
   --no-paginate \
   --output release-report.marp.md
@@ -204,6 +206,16 @@ ws knowledge presentation render KN-12AB \
   --output adapter-rollout.html
 ```
 
+色、font、余白、図表サイズを変える場合はworkspace内の次のfileを編集します。
+
+```text
+templates/knowledge/presentations/scientific.css
+```
+
+このCSSは生成する`.marp.md`へ埋め込まれるため、別途Marp themeを登録する必要はありません。`ws init`を
+再実行しても編集済みCSSは上書きされません。図は通常のMarkdown imageで置き、captionは`<small>`または
+`<figcaption>`を使うと中央配置のcaption styleが適用されます。
+
 `--json`と`--format html`を組み合わせるとsource metadataとHTMLをJSONで返します。Marp CLIがない場合は
 installまたは`WORK_SMARTER_MARP_CLI`設定を案内するerrorになります。command argumentを環境変数へ含めることは
 できません。
@@ -211,8 +223,8 @@ installまたは`WORK_SMARTER_MARP_CLI`設定を案内するerrorになります
 APIからは次のread-only routeを使用します。最初はJSONのMarp projection、2番目はbrowserで直接開けるHTMLです。
 
 ```text
-GET /api/knowledge/notes/{id}/presentations/marp?theme=default&paginate=true
-GET /api/knowledge/notes/{id}/presentations/marp/html?theme=default&paginate=true
+GET /api/knowledge/notes/{id}/presentations/marp?template=scientific&theme=default&paginate=true
+GET /api/knowledge/notes/{id}/presentations/marp/html?template=scientific&theme=default&paginate=true
 ```
 
 ## Current limits
@@ -221,5 +233,6 @@ GET /api/knowledge/notes/{id}/presentations/marp/html?theme=default&paginate=tru
 - 添付ファイルのcopy、version管理、content extractionは行わない。
 - promotion後の双方向同期は行わない。
 - Confluence push/pullとprovider mappingはKnowledgeではなく、後続のpublishing featureで扱う。
-- MarpからPDF/PPTX/imageへのcompileとcustom theme asset管理は行わない。
+- MarpからPDF/PPTX/imageへのcompileは行わない。
+- visual templateは現在`scientific`だけで、speaker notesやaudience別variantはない。
 - graph visualization、automatic link suggestion、semantic/embedding searchは未実装。

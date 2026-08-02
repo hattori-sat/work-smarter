@@ -23,5 +23,6 @@
 - [Feature contract](architecture/0002-feature-contract.md)
 - [Product specifications](product/)
 - [Research notes](research/)
+- [Scientific presentation template research](research/scientific-presentation-template.md)
 
 実装進捗と受入条件はrepository rootの [TASK.md](../TASK.md) を正本とする。

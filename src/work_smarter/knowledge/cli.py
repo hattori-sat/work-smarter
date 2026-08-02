@@ -19,6 +19,7 @@ from work_smarter.knowledge.models import (
     KnowledgePresentationMode,
     KnowledgeSearchField,
     MarpPresentationFormat,
+    MarpPresentationTemplate,
     SourceReference,
     SourceReferenceKind,
 )
@@ -217,6 +218,10 @@ def render_presentation(
         typer.Option("--mode", case_sensitive=False, help="Presentation narrative mode."),
     ] = KnowledgePresentationMode.TECHNICAL_REPORT,
     theme: Annotated[str, typer.Option(help="Marp theme name.")] = "default",
+    presentation_template: Annotated[
+        MarpPresentationTemplate,
+        typer.Option("--template", case_sensitive=False, help="Visual template."),
+    ] = MarpPresentationTemplate.SCIENTIFIC,
     paginate: Annotated[
         bool,
         typer.Option("--paginate/--no-paginate", help="Show page numbers."),
@@ -240,6 +245,7 @@ def render_presentation(
                 note_id,
                 compiler=MarpCliCompiler.from_environment(),
                 mode=mode,
+                template=presentation_template,
                 theme=theme,
                 paginate=paginate,
             )
@@ -248,6 +254,7 @@ def render_presentation(
             rendered = service.render_presentation(
                 note_id,
                 mode=mode,
+                template=presentation_template,
                 theme=theme,
                 paginate=paginate,
             )

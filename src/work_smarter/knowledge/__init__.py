@@ -19,6 +19,7 @@ from work_smarter.knowledge.models import (
     MarpHtmlPresentation,
     MarpPresentation,
     MarpPresentationFormat,
+    MarpPresentationTemplate,
     SourceReference,
     SourceReferenceKind,
 )
@@ -67,6 +68,7 @@ __all__ = [
     "MarpHtmlPresentation",
     "MarpPresentation",
     "MarpPresentationFormat",
+    "MarpPresentationTemplate",
     "KnowledgeService",
     "SourceReference",
     "SourceReferenceKind",

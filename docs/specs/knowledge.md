@@ -31,6 +31,7 @@ source、stable-ID link、backlink、検索から再発見できるようにす�
 - current searchは永続indexを持たず、note集合をcase-insensitive substring scanする。
 - Marp presentationはKnowledge revisionから再生成できるread-only projectionである。
 - HTML previewはoptional `MarpCompiler` Portの出力であり、Knowledge正本ではない。
+- Marp visual templateはclosed enumで選択し、workspaceのuser-overridable CSSをprojectionへinline化する。
 
 ## Inferences
 
@@ -193,4 +194,4 @@ Request modelはunknown fieldを拒否し、OpenAPI responseは`KnowledgeDocumen
 - full-text/semantic index、ranking、graph visualization
 - multi-user permission、remote collaboration、merge conflict resolution
 - automatic taxonomy、automatic link suggestion
-- MarpからPDF、PPTX、imageへのbinary compile、custom theme asset管理
+- MarpからPDF、PPTX、imageへのbinary compile、複数visual template

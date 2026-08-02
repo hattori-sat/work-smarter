@@ -217,6 +217,7 @@ def test_knowledge_cli_renders_marp_to_stdout_and_safe_output_file(
     payload = json.loads(rendered.stdout)
     assert payload["source_id"] == note_id
     assert payload["mode"] == "technical_report"
+    assert payload["template"] == "scientific"
     assert payload["theme"] == "uncover"
     assert payload["markdown"].startswith("---\nmarp: true\n")
 
@@ -290,6 +291,7 @@ def test_knowledge_cli_renders_marp_to_stdout_and_safe_output_file(
     assert html_rendered.exit_code == 0, html_rendered.output
     html_payload = json.loads(html_rendered.stdout)
     assert html_payload["source_id"] == note_id
+    assert html_payload["template"] == "scientific"
     assert html_payload["media_type"] == "text/html"
     assert html_payload["html"].startswith("<!doctype html>")
     assert html_output.read_text(encoding="utf-8") == html_payload["html"]

@@ -20,6 +20,7 @@ from work_smarter.knowledge.models import (
     KnowledgePresentationMode,
     KnowledgeSearchField,
     MarpPresentation,
+    MarpPresentationTemplate,
     SourceReference,
     SourceReferenceKind,
 )
@@ -28,6 +29,7 @@ from work_smarter.knowledge.presentations import MarpCompiler
 from work_smarter.knowledge.service import KnowledgeService
 from work_smarter.knowledge.templates import (
     initialize_knowledge_templates,
+    presentation_template_path,
     template_path,
 )
 from work_smarter.storage.workspace import EntityRegistry, EntitySpec, Workspace
@@ -75,6 +77,27 @@ def test_feature_registers_independent_persistence_and_templates(tmp_path: Path)
     for initializer in registry.workspace_initializers:
         initializer(workspace)
     assert decision_template.read_text(encoding="utf-8") == "# My decision template\n"
+
+    technical_report_template = template_path(workspace, KnowledgeNoteType.TECHNICAL_REPORT)
+    assert "## Objective" in technical_report_template.read_text(encoding="utf-8")
+    assert "## Method" in technical_report_template.read_text(encoding="utf-8")
+
+    scientific_theme = presentation_template_path(
+        workspace,
+        MarpPresentationTemplate.SCIENTIFIC,
+    )
+    theme_content = scientific_theme.read_text(encoding="utf-8")
+    assert "align-content: start" in theme_content
+    assert "justify-content: flex-start" in theme_content
+    assert "section img" in theme_content
+    assert "h1" in theme_content
+    assert "h2" in theme_content
+    assert "h3" in theme_content
+
+    scientific_theme.write_text("section { color: rebeccapurple; }\n", encoding="utf-8")
+    for initializer in registry.workspace_initializers:
+        initializer(workspace)
+    assert scientific_theme.read_text(encoding="utf-8") == ("section { color: rebeccapurple; }\n")
 
 
 def test_knowledge_package_does_not_import_gtd() -> None:
@@ -147,11 +170,17 @@ def test_technical_report_template_renders_as_read_only_marp_projection(
     assert presentation.source_id == created.note.id
     assert presentation.source_revision == 1
     assert presentation.mode is KnowledgePresentationMode.TECHNICAL_REPORT
+    assert presentation.template is MarpPresentationTemplate.SCIENTIFIC
     assert presentation.theme == "gaia"
     assert presentation.paginate is False
     assert presentation.media_type == "text/markdown"
     assert presentation.file_extension == ".marp.md"
-    assert presentation.markdown.startswith("---\nmarp: true\ntheme: gaia\npaginate: false\n---\n")
+    assert presentation.markdown.startswith(
+        "---\nmarp: true\ntheme: gaia\npaginate: false\nstyle: |\n"
+    )
+    assert "  section {" in presentation.markdown
+    assert "    justify-content: flex-start;" in presentation.markdown
+    assert "  section img," in presentation.markdown
     assert "# Database adapter rollout" in presentation.markdown
     assert "<!-- Source: " + created.note.id + "@1 -->" in presentation.markdown
     assert "\n---\n\n## Executive Summary" in presentation.markdown
@@ -160,6 +189,25 @@ def test_technical_report_template_renders_as_read_only_marp_projection(
     assert "```python\n## This is code, not a slide\n```" in presentation.markdown
     assert source_path.read_bytes() == source_before
     assert knowledge_workspace.event_store.read_all() == events_before
+
+
+def test_marp_projection_uses_user_overridden_scientific_theme(
+    knowledge: KnowledgeService,
+    knowledge_workspace: Workspace,
+) -> None:
+    presentation_template_path(
+        knowledge_workspace,
+        MarpPresentationTemplate.SCIENTIFIC,
+    ).write_text(
+        "section { background: #123456; }\n",
+        encoding="utf-8",
+    )
+    created = knowledge.create(title="Custom scientific style")
+
+    rendered = knowledge.render_presentation(created.note.id)
+
+    assert rendered.template is MarpPresentationTemplate.SCIENTIFIC
+    assert "  section { background: #123456; }" in rendered.markdown
 
 
 def test_marp_projection_rejects_unsafe_theme_without_side_effects(
