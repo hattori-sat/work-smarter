@@ -1,17 +1,39 @@
 # Workspace and Markdown
 
-各taskは `tasks/<stable-id>.md` の1ファイルです。frontmatterは機械が読む状態、本文は人が読む
-goal、制約、メモ、結果、証拠を保持します。
+各taskは `tasks/<stable-id>.md` の1ファイルです。Databaseはstatus、relation、schedule等のstructured
+state、Markdown本文はgoal、制約、メモ、結果、証拠等のnarrativeを保持します。FrontmatterはDatabaseから
+生成されるread-only projectionです。
 
 ## Safe direct editing
 
-VS Codeでの直接編集は正式に対応します。ただしID、kind、status固有必須fieldは壊さないでください。
+VS CodeではMarkdown本文とuser templateを直接編集できます。Frontmatterを変更してもDatabase stateには
+反映されず、次のCLI/API writeで再投影されます。新しいentity fileを手作業で置いても、legacy cutover完了後は
+自動importされません。Structured fieldはCLI/APIを使ってください。
 
 ```bash
 ws doctor
 ```
 
 doctorがerrorを返した場合、その文書をCLI/APIが任意解釈して更新することはありません。
+
+## Recovery and delivery status
+
+```bash
+ws system operation list
+ws system operation recover
+ws system outbox list
+```
+
+Operationが`failed`なら通常例外として拒否されており、reopenで勝手に再実行されません。`pending`はprocess
+crashの可能性があり、workspace openまたは`recover`がMarkdown projectionとの一致を検証します。
+
+Local server経由で同じsystem contractを使う場合は次のように指定します。
+
+```bash
+ws --server-url http://127.0.0.1:8765 system operation list
+```
+
+V1はloopback URLだけを許可します。
 
 ## Templates
 

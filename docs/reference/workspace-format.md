@@ -1,16 +1,18 @@
-# Workspace format 0.1
+# Workspace format 1.0
 
 ## Authority
 
-- 現行domain entityの現在状態: Markdown + YAML frontmatter
-- 現行domainの操作・timer・review履歴: `.work-smarter/events.ndjson`
+- Registered domain entityのstructured state: configured Application Database
+- Domainの操作・timer・review履歴: Database `activity_events`
+- Narrative本文: entity Markdown body
+- YAML frontmatterと`.work-smarter/events.ndjson`: read-only compatibility projection
 - Knowledge search/backlink: 現在のMarkdownから都度再構築するprojection
 - Application database: workspace configで選択したbackend artifact（初期値はSQLite）
 
-SQLite adapterはmigration metadata、append-only activity event、outbox schemaを持つ。GTD、Knowledge、
-Managed Projectの正本は各domain migrationが完了するまでMarkdown/JSONLであり、曖昧な二重書込みはしない。
-Targetの正本境界は[ADR 0003](../architecture/0003-hybrid-source-of-truth-and-local-application-server.md)
-を参照する。
+SQLite schema v2はmigration metadata、structured entity、operation journal、append-only activity、leased
+outboxを持つ。Legacy workspaceは一度だけfrontmatter/JSONLをimportし、以後のdirect frontmatter editや
+手作りentity fileを再importしない。正本境界は
+[ADR 0007](../architecture/0007-database-authority-journal-and-outbox.md)を参照する。
 
 ## Directory ownership
 
@@ -26,10 +28,31 @@ Targetの正本境界は[ADR 0003](../architecture/0003-hybrid-source-of-truth-a
 | `templates/gtd/` | GTD/user | body template |
 | `templates/knowledge/` | Knowledge/user | note type別body template |
 | `templates/knowledge/presentations/` | Knowledge/user | Marp visual template CSS |
-| `.work-smarter/` | core | config、監査event、SQLite database、lock、provider state |
+| `.work-smarter/` | core | config、Database、audit projection、lock、provider state |
 
 `knowledge/gtd/`と`knowledge/notes/`は同じ親directoryにあるが、前者はGTD、後者はKnowledgeが所有する。
 Project management featureは `gtd/projects/` を再利用しない。
+
+### Managed Project schedule fields
+
+Managed Projectの`working_calendar`は`working_weekdays`（月曜=0〜日曜=6）、`non_working_days`、
+`additional_working_days`を持つ。互換性のためfield未記載時は週7日を稼働日とする。
+
+Work packageとmilestoneの`dependencies`は次のshapeを持つ。旧`dependency_ids`は
+Finish-to-Start / lag 0として読み込み、typed entryが同じpredecessorにあればtyped entryを優先する。
+
+```yaml
+dependencies:
+  - predecessor_id: WP-DESIGN
+    type: finish_to_start
+    lag_days: 1
+progress_percent: 40
+jira_status: In Progress
+```
+
+`type`は`finish_to_start`、`start_to_start`、`finish_to_finish`、`start_to_finish`のいずれか。
+`progress_percent`は0〜100である。Baselineはcontent hashだけでなく、その時点のschedule item ID、
+start、finishをimmutable snapshotとして保持する。Gantt HTMLはこれらから再生成できるprojectionである。
 
 ## Markdown entity
 
@@ -182,7 +205,8 @@ H1/H2/H3の階層、図表中央配置を既定とする。すべてのtemplate�
 }
 ```
 
-0.1では監査履歴であり、feature間deliveryを保証するmessage busではない。
+JSONLは互換監査projectionであり、feature間deliveryを保証するmessage busではない。正本activityはDatabase、
+外部deliveryは`outbox_items`である。
 
 Knowledgeが追記するevent typeは次の3件である。
 
@@ -192,10 +216,22 @@ Knowledgeが追記するevent typeは次の3件である。
 
 ## Compatibility
 
-Task schema v1/v2はread時にv3へlazy migrationし、次回writeでv3として保存する。既に完了済みの
-v2 rigorous taskは新しいassurance gateで読めなくならないよう、frontmatterにgrandfather markerを
-明示する。Knowledgeはschema version 1だけを受け付け、migrationはまだない。その他entityと未対応versionは
-自動推測せずvalidation errorにする。
+Task schema v1/v2はlegacy import時にv3へvalidate/migrateし、Database payloadとして保存する。既に完了済みの
+v2 rigorous taskはassurance grandfather markerを保持する。Knowledgeはschema version 1だけを受け付ける。
+未対応versionは自動推測せずvalidation errorにする。
+
+Cutover後はMarkdown bodyだけが直接編集可能な正本である。FrontmatterはCLI/API writeごとにDatabase payloadから
+再生成されるため、structured field変更にはdomain commandを使う。
+
+### SQLite schema v2 contracts
+
+- `structured_entities`: `(kind, entity_id)`、JSON payload、projection path、monotonic revision
+- `operation_journal`: idempotency key、aggregate、payload、projection path、pending/completed/failed
+- `activity_events`: append-only trigger付きdomain/infrastructure event
+- `outbox_items`: pending/processing/completed/failed、attempt、availability、lease
+- `application_markers`: one-time legacy import completion
+
+これらのtableへ任意SQLを実行するpublic CLI/APIはない。値は全てstatic SQL statementへparameter bindingする。
 
 ## Backup representation
 

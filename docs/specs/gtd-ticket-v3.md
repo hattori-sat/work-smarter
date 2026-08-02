@@ -142,8 +142,8 @@ evidence_links: []
 - Notes
 - Result / Evidence
 
-query/report対象はfrontmatter、長文の思考過程は本文へ置く。重複項目はapplicationがtemplate生成時に
-snapshotとして埋めるが、frontmatterを正とする。
+Query/report対象はDatabase structured payload、長文の思考過程は本文へ置く。Applicationはpayloadを
+frontmatterへread-only snapshotとして投影する。
 
 ## Relations
 
@@ -168,7 +168,7 @@ relationで表す。
 
 ## Schema migration
 
-Task v1/v2はread時にmemory上でv3へ変換し、次回writeでv3として保存する。
+Legacy Task v1/v2はone-time import時にmemory上でv3へ変換し、Databaseへv3として保存する。
 
 - `status` → lifecycle/disposition/execution/blocker
 - `estimate_minutes` → original/remaining estimate
@@ -179,7 +179,7 @@ Task v1/v2はread時にmemory上でv3へ変換し、次回writeでv3として保
 - v2で既に完了していたrigorous taskは、当時存在しなかったassurance review markerを
   `assurance_grandfathered`として明示し、読めなくなることを防ぐ
 
-原文backupを暗黙作成せず、migration commandを追加するまでは個別write時のlazy migrationとする。
+原文Markdownはbackup/export対象に残し、legacy import marker完了後はfrontmatterを再importしない。
 
 ## Invariants
 
@@ -196,7 +196,7 @@ Task v1/v2はread時にmemory上でv3へ変換し、次回writeでv3として保
 
 ## TDD acceptance
 
-1. v1/v2 Markdownを読むとv3 Taskになり、write後はv3 frontmatterになる。
+1. v1/v2 Markdownを初回importするとv3 Taskになり、write後はv3 frontmatter projectionになる。
 2. quick Taskはtitleだけで作成・完了できる。
 3. standard Taskはgoalまたはcondition不足を拒否する。
 4. assured Taskはevidence不足の完了を拒否する。

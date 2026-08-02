@@ -262,11 +262,32 @@ ws task correct-work TASK-20260723 WL-1 20 \
 
 数字は評価点ではなく、見積りの癖、外部待ち、blocker、WIPの滞留を発見する材料として使います。
 
+## Canonical GTD commands and editor integration
+
+既存の`ws capture`、`ws focus`、`ws done`は日常操作用aliasとして残ります。script、Vim、長期的な
+command contractではdomain/resource/operation順のcanonical formを使います。
+
+```bash
+ws gtd capture "APIの失敗条件を調べる"
+ws gtd action create "再現testを書く" --context @computer --estimate 20
+ws gtd action list --output picker
+ws gtd action open TASK-20260803
+ws gtd project create "再現可能なdebugging" --outcome "全failureをlocal再現できる"
+ws gtd project list
+```
+
+`open`はworkspace内のunique ID prefixを解決し、`$EDITOR`へpathを固定引数として渡します。
+`--output picker`は`status / ID / title / context / estimate`の安定した1行形式で、fzf等へpipeできます。
+
+GTD projectは複数actionを必要とするoutcomeです。WBSやscheduleを持つManaged Projectとは別機能であり、
+private modelを共有しません。
+
 ## Facts, inferences, and UNKNOWNs
 
 ### Facts
 
-- Markdown/YAML snapshotとappend-only audit eventが正本である。
+- Database structured state/activityが正本、Markdown本文がnarrative正本である。Frontmatter/JSONLは
+  read-only compatibility projectionである。
 - task IDはfull IDだけでなく、workspace内で一意なprefixをCLI/API pathで解決できる。
 - `--json` modeは対話promptを行わず、machine-readable outputだけをstdoutへ返す。
 - waiting、blocker、calendarは同時に存在し得るfacetとして保存される。

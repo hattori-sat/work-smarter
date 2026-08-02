@@ -14,6 +14,8 @@ from work_smarter.shared.persistence.database import (
     DatabaseBackend,
     DatabaseBackendRegistry,
     DatabaseConfiguration,
+    StructuredStateBackend,
+    StructuredStateStore,
     create_database_backend,
 )
 from work_smarter.storage.workspace import DEFAULT_WORKSPACE_FEATURES, Workspace
@@ -69,6 +71,22 @@ def configured_database(
     )
 
 
+def configured_structured_store(
+    root: Path | str,
+    *,
+    database_registry: DatabaseBackendRegistry | None = None,
+) -> StructuredStateStore:
+    """Resolve the migrated structured-state capability or fail explicitly."""
+
+    database = configured_database(root, database_registry=database_registry)
+    database.migrate()
+    if not isinstance(database, StructuredStateBackend):
+        raise InvalidDocumentError(
+            f"Database backend {database.name!r} does not provide structured state"
+        )
+    return database.structured_store
+
+
 def initialize_workspace(
     root: Path | str,
     *,
@@ -82,18 +100,28 @@ def initialize_workspace(
     )
     composition = compose_features(enabled)
     workspace = Workspace.initialize(root, composition.entity_registry())
-    configured_database(
+    database = configured_database(
         workspace.root,
         database_registry=database_registry,
-    ).migrate()
+    )
+    database.migrate()
+    if isinstance(database, StructuredStateBackend):
+        workspace.attach_structured_store(database.structured_store)
     for initializer in composition.workspace_initializers:
         initializer(workspace)
     return workspace
 
 
-def open_workspace(root: Path | str) -> Workspace:
+def open_workspace(
+    root: Path | str,
+    *,
+    database_registry: DatabaseBackendRegistry | None = None,
+) -> Workspace:
     """Open a workspace after composing exactly its enabled feature codecs."""
 
     probe = Workspace.open(root)
     registry = compose_features(probe.settings().features).entity_registry()
-    return Workspace.open(root, registry)
+    database = configured_database(root, database_registry=database_registry)
+    database.migrate()
+    store = database.structured_store if isinstance(database, StructuredStateBackend) else None
+    return Workspace.open(root, registry, structured_store=store)

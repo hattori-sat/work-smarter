@@ -745,6 +745,219 @@ def render_html_project_report(
     return "\n".join(sections) + "\n"
 
 
+def render_html_gantt(
+    project: ManagedProject,
+    schedule: ScheduleProjection,
+    *,
+    today: date | None = None,
+) -> str:
+    """Render an offline, interactive Gantt using only HTML, CSS, and SVG."""
+
+    ordered = _ordered_schedule_items(schedule)
+    latest_baseline = project.baselines[-1] if project.baselines else None
+    baseline_by_id = (
+        {item.id: item for item in latest_baseline.schedule_items} if latest_baseline else {}
+    )
+    starts = [item.scheduled_start_on for item in ordered]
+    finishes = [item.scheduled_finish_on for item in ordered]
+    starts.extend(item.start_on for item in baseline_by_id.values())
+    finishes.extend(item.finish_on for item in baseline_by_id.values())
+    timeline_start = min(starts, default=schedule.anchor_on)
+    timeline_finish = max(finishes, default=schedule.project_finish_on or schedule.anchor_on)
+    total_days = max(1, (timeline_finish - timeline_start).days + 1)
+    source_by_id = _source_items(project)
+
+    def position(start: date, finish: date) -> tuple[int, int]:
+        return (start - timeline_start).days, max(1, (finish - start).days + 1)
+
+    day_headers = []
+    for offset in range(total_days):
+        value = timeline_start.fromordinal(timeline_start.toordinal() + offset)
+        day_headers.append(
+            f'<span class="day" style="grid-column:{offset + 1}">{value:%m-%d}</span>'
+        )
+
+    rows: list[str] = []
+    dependency_rows: list[str] = []
+    for item in ordered:
+        source = source_by_id.get(item.id)
+        phase_id = getattr(source, "phase_id", None)
+        phase = _phase_name(project, phase_id)
+        owner = item.owner or "-"
+        jira = item.jira_status or "-"
+        search = " ".join((item.id, item.title, phase, owner, jira)).casefold()
+        current_left, current_width = position(item.scheduled_start_on, item.scheduled_finish_on)
+        bar_id = _mermaid_id(item.id)
+        baseline_html = ""
+        baseline = baseline_by_id.get(item.id)
+        if baseline is not None:
+            baseline_left, baseline_width = position(baseline.start_on, baseline.finish_on)
+            baseline_html = (
+                f'<span class="baseline-bar" style="--left:{baseline_left};'
+                f'--span:{baseline_width}" title="Baseline: '
+                f'{baseline.start_on.isoformat()} to {baseline.finish_on.isoformat()}"></span>'
+            )
+        classes = ["gantt-bar"]
+        if item.critical:
+            classes.append("critical")
+        if item.delay_days:
+            classes.append("delayed")
+        if item.kind == "milestone":
+            milestone_classes = ["milestone"]
+            if item.critical:
+                milestone_classes.append("critical")
+            current_html = (
+                f'<span id="{bar_id}" class="{" ".join(milestone_classes)}" '
+                f'style="--left:{current_left}" title="Milestone: '
+                f'{html.escape(item.title, quote=True)}"></span>'
+            )
+        else:
+            current_html = (
+                f'<span id="{bar_id}" class="{" ".join(classes)}" '
+                f'style="--left:{current_left};--span:{current_width}" '
+                f'title="{item.scheduled_start_on.isoformat()} to '
+                f"{item.scheduled_finish_on.isoformat()}; total float "
+                f'{item.total_float_days}; free float {item.free_float_days}">'
+                f'<span class="progress" style="width:{item.progress_percent}%"></span></span>'
+            )
+        rows.append(
+            f'<div class="gantt-row" data-search="{html.escape(search, quote=True)}">'
+            '<div class="item-meta">'
+            f"<strong>{html.escape(item.id, quote=True)}</strong>"
+            f'<span class="item-title">{html.escape(item.title, quote=True)}</span>'
+            f"<span>{html.escape(phase, quote=True)}</span>"
+            f"<span>{html.escape(owner, quote=True)}</span>"
+            f"<span>{item.progress_percent}%</span>"
+            f"<span>{html.escape(jira, quote=True)}</span>"
+            f"<span>TF {item.total_float_days} / FF {item.free_float_days}</span>"
+            "</div>"
+            f'<div class="track" style="--days:{total_days}">{baseline_html}{current_html}</div>'
+            "</div>"
+        )
+        for dependency in item.dependencies:
+            dependency_rows.append(
+                f'<li data-from="{_mermaid_id(dependency.predecessor_id)}" '
+                f'data-to="{bar_id}">{dependency.type.label}'
+                f" ({dependency.lag_days:+d} working days)</li>"
+            )
+
+    today_html = ""
+    marker_day = today or date.today()
+    if timeline_start <= marker_day <= timeline_finish:
+        marker_left = (marker_day - timeline_start).days
+        today_html = f'<span class="today-marker" style="--left:{marker_left}"></span>'
+
+    title = html.escape(f"{project.title} — Gantt", quote=True)
+    css = f"""
+:root{{--day:34px;--meta:690px;--ink:#172033;--muted:#657087;--grid:#dce2ea;
+--critical:#c73737;--accent:#3069d3}}
+*{{box-sizing:border-box}}
+body{{margin:0;font:14px system-ui,sans-serif;color:var(--ink);background:#f6f8fb}}
+main{{padding:24px;min-width:900px}} h1{{margin:0 0 16px}}
+.controls{{display:flex;gap:12px;margin-bottom:12px}}
+input,select{{padding:7px 9px;border:1px solid #aeb8c8;border-radius:6px;background:white}}
+.gantt{{background:white;border:1px solid var(--grid);border-radius:10px;
+overflow:auto;position:relative}}
+.timeline-head,.gantt-row{{display:grid;grid-template-columns:var(--meta) max-content;
+min-width:max-content}}
+.meta-head,.item-meta{{position:sticky;left:0;z-index:5;background:white;display:grid;
+grid-template-columns:100px 150px 100px 80px 60px 90px 110px;gap:0;
+border-right:1px solid var(--grid)}}
+.meta-head span,.item-meta>*{{padding:8px;border-right:1px solid #edf0f5;
+overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
+.days,.track{{width:calc(var(--days) * var(--day));display:grid;
+grid-template-columns:repeat(var(--days),var(--day));position:relative;
+background:repeating-linear-gradient(90deg,transparent 0 calc(var(--day) - 1px),
+var(--grid) calc(var(--day) - 1px) var(--day))}}
+.days{{--days:{total_days};height:34px}}
+.day{{font-size:11px;color:var(--muted);padding:8px 2px;
+border-right:1px solid var(--grid)}}
+.gantt-row{{border-top:1px solid var(--grid);min-height:54px}}
+.track{{min-height:54px;--days:{total_days}}}
+.baseline-bar,.gantt-bar{{position:absolute;
+left:calc(var(--left) * var(--day) + 3px);
+width:calc(var(--span) * var(--day) - 6px);border-radius:5px}}
+.baseline-bar{{top:7px;height:7px;background:#9aa6b8}}
+.gantt-bar{{top:20px;height:24px;background:var(--accent);overflow:hidden}}
+.gantt-bar.critical{{outline:2px solid var(--critical)}}
+.gantt-bar.delayed{{background:#d77a2e}}
+.progress{{display:block;height:100%;background:#173f91;opacity:.7}}
+.milestone{{position:absolute;left:calc(var(--left) * var(--day) + 11px);top:19px;
+width:18px;height:18px;background:var(--accent);transform:rotate(45deg)}}
+.milestone.critical{{outline:2px solid var(--critical)}}
+.today-marker{{position:absolute;z-index:4;
+left:calc(var(--meta) + var(--left) * var(--day) + 17px);top:34px;bottom:0;
+border-left:2px solid #d53b80;pointer-events:none}}
+#dependency-lines{{position:absolute;inset:34px 0 0 var(--meta);pointer-events:none;
+z-index:3;overflow:visible}}
+.dependencies{{position:absolute;left:-9999px}}
+""".strip()
+    script = """
+const root=document.documentElement;
+const filter=document.getElementById('gantt-filter');
+const zoom=document.getElementById('gantt-zoom');
+filter.addEventListener('input',()=>document.querySelectorAll('.gantt-row').forEach(
+  row=>row.hidden=!row.dataset.search.includes(filter.value.toLowerCase())));
+zoom.addEventListener('change',()=>{
+  root.style.setProperty('--day',zoom.value+'px');drawDependencies()});
+function drawDependencies(){
+  const svg=document.getElementById('dependency-lines');svg.replaceChildren();
+  const base=svg.getBoundingClientRect();
+  document.querySelectorAll('.dependencies li').forEach(link=>{
+    const from=document.getElementById(link.dataset.from);
+    const to=document.getElementById(link.dataset.to);
+    if(!from||!to||from.closest('.gantt-row').hidden||
+       to.closest('.gantt-row').hidden)return;
+    const a=from.getBoundingClientRect(),b=to.getBoundingClientRect();
+    const ns='http://www.w3.org/2000/svg';
+    const path=document.createElementNS(ns,'path');
+    const x1=a.right-base.left,y1=a.top+a.height/2-base.top;
+    const x2=b.left-base.left,y2=b.top+b.height/2-base.top;
+    path.setAttribute('d',`M${x1},${y1} H${x1+12} V${y2} H${x2}`);
+    path.setAttribute('fill','none');path.setAttribute('stroke','#657087');
+    path.setAttribute('stroke-width','1.5');svg.append(path)})}
+filter.addEventListener('input',drawDependencies);
+addEventListener('resize',drawDependencies);addEventListener('load',drawDependencies);
+""".strip()
+    controls = (
+        '<div class="controls"><label>Filter <input id="gantt-filter" type="search" '
+        'placeholder="ID, title, owner, phase"></label><label>Zoom '
+        '<select id="gantt-zoom"><option value="24">Compact</option>'
+        '<option value="34" selected>Day</option><option value="52">Wide</option>'
+        "</select></label></div>"
+    )
+    meta_header = (
+        '<div class="timeline-head"><div class="meta-head"><span>ID</span>'
+        "<span>Work item</span><span>WBS / phase</span><span>Owner</span>"
+        "<span>Progress</span><span>Jira</span><span>Float</span></div>"
+    )
+    return "\n".join(
+        [
+            "<!doctype html>",
+            '<html lang="en"><head><meta charset="utf-8">',
+            '<meta name="viewport" content="width=device-width,initial-scale=1">',
+            f"<title>{title}</title>",
+            "<style>",
+            css,
+            "</style></head><body><main>",
+            f"<h1>{title}</h1>",
+            controls,
+            '<section class="gantt" data-testid="gantt-chart">',
+            meta_header,
+            f'<div class="days">{"".join(day_headers)}</div></div>',
+            today_html,
+            '<svg id="dependency-lines" aria-label="Dependency lines"></svg>',
+            *rows,
+            f'<ul class="dependencies">{"".join(dependency_rows)}</ul>',
+            "</section>",
+            "<script>",
+            script,
+            "</script></main></body></html>",
+            "",
+        ]
+    )
+
+
 def _markdown_table(headers: Sequence[str], rows: Sequence[Sequence[object]]) -> str:
     lines = [
         "| " + " | ".join(_markdown_cell(header) for header in headers) + " |",

@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, TypeVar
+from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
@@ -23,8 +24,12 @@ from work_smarter.errors import (
     InvalidDocumentError,
     WorkspaceNotInitializedError,
 )
-from work_smarter.shared.persistence.database import DatabaseConfiguration
-from work_smarter.storage.events import EventStore
+from work_smarter.shared.persistence.database import (
+    DatabaseConfiguration,
+    StructuredEntityState,
+    StructuredStateStore,
+)
+from work_smarter.storage.events import DatabaseEventStore, EventStore
 from work_smarter.storage.frontmatter import read_markdown, write_markdown
 
 DEFAULT_WORKSPACE_FEATURES: tuple[str, ...] = (
@@ -122,11 +127,17 @@ def _process_lock_for(path: Path) -> threading.RLock:
 
 
 class Workspace:
-    """A directory whose durable state is ordinary Markdown and JSON Lines."""
+    """A workspace with optional database-owned structure and Markdown narrative."""
 
-    def __init__(self, root: Path | str, registry: EntityRegistry | None = None):
+    def __init__(
+        self,
+        root: Path | str,
+        registry: EntityRegistry | None = None,
+        structured_store: StructuredStateStore | None = None,
+    ):
         self.root = Path(root).expanduser().resolve()
         self.registry = registry or EntityRegistry()
+        self.structured_store = structured_store
 
     @property
     def state_dir(self) -> Path:
@@ -138,15 +149,19 @@ class Workspace:
 
     @property
     def event_store(self) -> EventStore:
-        return EventStore(self.state_dir / "events.ndjson")
+        path = self.state_dir / "events.ndjson"
+        if self.structured_store is not None:
+            return DatabaseEventStore(path, self.structured_store)
+        return EventStore(path)
 
     @classmethod
     def initialize(
         cls,
         root: Path | str,
         registry: EntityRegistry | None = None,
+        structured_store: StructuredStateStore | None = None,
     ) -> Workspace:
-        workspace = cls(root, registry)
+        workspace = cls(root, registry, structured_store)
         workspace.root.mkdir(parents=True, exist_ok=True)
         workspace.state_dir.mkdir(parents=True, exist_ok=True)
         for spec in workspace.registry.specs:
@@ -156,6 +171,8 @@ class Workspace:
             workspace._write_config(settings)
         events_path = workspace.state_dir / "events.ndjson"
         events_path.touch(exist_ok=True)
+        if structured_store is not None:
+            workspace._activate_structured_state()
         return workspace
 
     @classmethod
@@ -163,14 +180,110 @@ class Workspace:
         cls,
         root: Path | str,
         registry: EntityRegistry | None = None,
+        structured_store: StructuredStateStore | None = None,
     ) -> Workspace:
-        workspace = cls(root, registry)
+        workspace = cls(root, registry, structured_store)
         if not workspace.config_path.is_file():
             raise WorkspaceNotInitializedError(
                 f"{workspace.root} is not initialized; run `ws init {workspace.root}`"
             )
         workspace.settings()
+        if structured_store is not None:
+            workspace._activate_structured_state()
         return workspace
+
+    def attach_structured_store(self, store: StructuredStateStore) -> None:
+        """Switch registered structured kinds to a migrated database authority."""
+
+        self.structured_store = store
+        self._activate_structured_state()
+
+    def _activate_structured_state(self) -> None:
+        self._recover_operations()
+        if (
+            self.structured_store is not None
+            and not self.structured_store.legacy_import_completed()
+        ):
+            self._import_legacy_records()
+            self._import_legacy_events()
+            self.structured_store.complete_legacy_import()
+
+    def _import_legacy_events(self) -> None:
+        store = self.structured_store
+        if store is None:
+            return
+        legacy = EventStore(self.state_dir / "events.ndjson")
+        for event in legacy.read_all():
+            store.append_activity_event(event.model_dump(mode="json", exclude_none=True))
+
+    def _operation_path(self, projection_path: str) -> Path:
+        relative = Path(projection_path)
+        if relative.is_absolute():
+            raise InvalidDocumentError("Operation projection path must be workspace-relative")
+        path = (self.root / relative).resolve()
+        if not path.is_relative_to(self.root):
+            raise InvalidDocumentError("Operation projection path escapes workspace")
+        return path
+
+    def _recover_operations(self) -> None:
+        store = self.structured_store
+        if store is None:
+            return
+        for operation in store.pending_operations():
+            path = self._operation_path(operation.projection_path)
+            if operation.operation_type == "entity.delete":
+                if path.exists():
+                    store.fail_operation(operation.id, "projection still exists")
+                else:
+                    store.commit_entity_delete(operation.id)
+                continue
+            if not path.is_file():
+                store.fail_operation(operation.id, "projection was not written")
+                continue
+            try:
+                document = read_markdown(path)
+                spec = self.registry.require(operation.aggregate_kind)
+                projected = spec.model.model_validate(document.metadata).model_dump(
+                    mode="json",
+                    exclude_none=True,
+                    exclude_computed_fields=True,
+                )
+            except (InvalidDocumentError, ValidationError, ValueError) as exc:
+                store.fail_operation(operation.id, f"invalid projection: {exc}")
+                continue
+            if projected != operation.payload:
+                store.fail_operation(operation.id, "projection does not match staged payload")
+                continue
+            store.commit_entity_write(operation.id)
+
+    def _import_legacy_records(self) -> None:
+        store = self.structured_store
+        if store is None:
+            return
+        refused_paths = {
+            operation.projection_path
+            for operation in store.list_operations(limit=1000)
+            if operation.status == "failed"
+        }
+        for spec in self.registry.specs:
+            directory = self.root / spec.directory
+            for path in sorted(directory.glob("*.md")):
+                if self.relative(path) in refused_paths:
+                    continue
+                document = self._read_projection(path, expected_kind=spec.kind)
+                entity_id = str(getattr(document.entity, "id", ""))
+                if store.get_entity(spec.kind, entity_id) is not None:
+                    continue
+                store.import_entity(
+                    kind=spec.kind,
+                    entity_id=entity_id,
+                    payload=document.entity.model_dump(
+                        mode="json",
+                        exclude_none=True,
+                        exclude_computed_fields=True,
+                    ),
+                    projection_path=self.relative(path),
+                )
 
     @contextmanager
     def lock(self) -> Iterator[None]:
@@ -243,18 +356,51 @@ class Workspace:
 
     def write(self, entity: EntityT, body: str = "") -> EntityRecord[EntityT]:
         path = self.path_for(entity)
-        write_markdown(
-            path,
-            entity.model_dump(
-                mode="json",
-                exclude_none=True,
-                exclude_computed_fields=True,
-            ),
-            body,
+        payload = entity.model_dump(
+            mode="json",
+            exclude_none=True,
+            exclude_computed_fields=True,
         )
+        store = self.structured_store
+        if store is None:
+            write_markdown(path, payload, body)
+            return EntityRecord(entity=entity, body=body, path=path)
+        operation_id = f"OP-{uuid4().hex}"
+        store.stage_entity_write(
+            operation_id=operation_id,
+            idempotency_key=operation_id,
+            kind=str(getattr(entity, "kind", "")),
+            entity_id=str(getattr(entity, "id", "")),
+            payload=payload,
+            projection_path=self.relative(path),
+        )
+        try:
+            write_markdown(path, payload, body)
+            store.commit_entity_write(operation_id)
+        except Exception as exc:
+            store.fail_operation(operation_id, str(exc))
+            raise
         return EntityRecord(entity=entity, body=body, path=path)
 
     def read(
+        self,
+        path: Path,
+        *,
+        expected_kind: str | None = None,
+    ) -> EntityRecord[BaseModel]:
+        store = self.structured_store
+        if store is None:
+            return self._read_projection(path, expected_kind=expected_kind)
+        if expected_kind is None:
+            projected = self._read_projection(path)
+            expected_kind = str(getattr(projected.entity, "kind", ""))
+        entity_id = validate_entity_id(path.stem)
+        state = store.get_entity(expected_kind, entity_id)
+        if state is None:
+            return self._read_projection(path, expected_kind=expected_kind)
+        return self._record_from_state(state, expected_kind=expected_kind)
+
+    def _read_projection(
         self,
         path: Path,
         *,
@@ -278,6 +424,39 @@ class Workspace:
             raise InvalidDocumentError(f"{path}: filename must match entity ID {entity_id!r}")
         return EntityRecord(entity=entity, body=document.body, path=path)
 
+    def _record_from_state(
+        self,
+        state: StructuredEntityState,
+        *,
+        expected_kind: str,
+    ) -> EntityRecord[BaseModel]:
+        if state.kind != expected_kind:
+            raise InvalidDocumentError(
+                f"Database kind {state.kind!r} does not match {expected_kind!r}"
+            )
+        spec = self.registry.require(expected_kind)
+        path = self._operation_path(state.projection_path)
+        expected_directory = (self.root / spec.directory).resolve()
+        if not path.is_relative_to(expected_directory):
+            raise InvalidDocumentError(
+                f"Database projection path is outside {spec.directory}: {state.projection_path}"
+            )
+        if not path.is_file():
+            raise InvalidDocumentError(f"Narrative projection is missing: {path}")
+        try:
+            entity = spec.model.model_validate(state.payload)
+        except ValidationError as exc:
+            raise InvalidDocumentError(
+                f"Database contains invalid {expected_kind} state: {exc}"
+            ) from exc
+        entity_id = validate_entity_id(str(getattr(entity, "id", "")))
+        if entity_id != state.entity_id or path.stem != entity_id:
+            raise InvalidDocumentError(
+                f"Database entity ID/path mismatch for {state.kind}:{state.entity_id}"
+            )
+        body = read_markdown(path).body
+        return EntityRecord(entity=entity, body=body, path=path)
+
     def list_records(
         self,
         kind: str,
@@ -287,6 +466,12 @@ class Workspace:
         spec = self.registry.require(kind)
         if spec.archived and not include_archive:
             return []
+        if self.structured_store is not None:
+            records = [
+                self._record_from_state(state, expected_kind=kind)
+                for state in self.structured_store.list_entities(kind)
+            ]
+            return sorted(records, key=self._sort_key)
         directory = self.root / spec.directory
         records = [self.read(path, expected_kind=kind) for path in sorted(directory.glob("*.md"))]
         return sorted(records, key=self._sort_key)
@@ -347,5 +532,24 @@ class Workspace:
         archived: EntityT,
     ) -> EntityRecord[EntityT]:
         destination = self.write(archived, record.body)
-        record.path.unlink()
+        store = self.structured_store
+        if store is None:
+            record.path.unlink()
+            return destination
+        operation_id = f"OP-{uuid4().hex}"
+        kind = str(getattr(record.entity, "kind", ""))
+        entity_id = str(getattr(record.entity, "id", ""))
+        store.stage_entity_delete(
+            operation_id=operation_id,
+            idempotency_key=operation_id,
+            kind=kind,
+            entity_id=entity_id,
+            projection_path=self.relative(record.path),
+        )
+        try:
+            record.path.unlink()
+            store.commit_entity_delete(operation_id)
+        except Exception as exc:
+            store.fail_operation(operation_id, str(exc))
+            raise
         return destination

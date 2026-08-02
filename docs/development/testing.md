@@ -12,6 +12,7 @@
 
 - domain/service: state transition、invariant、時間、関連
 - storage: YAML strictness、atomicity、path safety、corruption
+- structured persistence: one-time import、journal crash recovery、outbox lease/retry、backup reload
 - adapter: CLI non-interactive/JSON、HTTP status/OpenAPI
 - feature boundary: import direction、codec composition、disabled feature
 - acceptance: captureからreview/publishまでのuser flow
@@ -31,4 +32,8 @@
 .venv/bin/ruff check src tests
 .venv/bin/ruff format --check src tests
 .venv/bin/pytest --cov=work_smarter --cov-report=term-missing
+.venv/bin/python scripts/release_smoke.py
 ```
+
+`release_smoke.py`は一時venvを作り、1.0 wheelとruntime dependencyをinstallし、console script、capture、
+operation journal、backup/restore、doctorをsource treeの`PYTHONPATH`なしで実行する。

@@ -13,6 +13,10 @@ from work_smarter.gtd.models import (
     Task,
     WeeklyReviewSession,
 )
+from work_smarter.shared.persistence.database import (
+    StructuredStateBackend,
+    create_database_backend,
+)
 from work_smarter.storage.workspace import EntityRegistry, EntitySpec, Workspace
 
 GTD_ENTITY_SPECS = (
@@ -32,4 +36,8 @@ def initialize_workspace(root: Path | str) -> Workspace:
 
 
 def open_workspace(root: Path | str) -> Workspace:
-    return Workspace.open(root, GTD_ENTITY_REGISTRY)
+    probe = Workspace.open(root, GTD_ENTITY_REGISTRY)
+    database = create_database_backend(probe.root, probe.settings().database)
+    database.migrate()
+    store = database.structured_store if isinstance(database, StructuredStateBackend) else None
+    return Workspace.open(root, GTD_ENTITY_REGISTRY, structured_store=store)

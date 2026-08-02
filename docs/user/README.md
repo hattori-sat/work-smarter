@@ -10,6 +10,7 @@ Work Smarterは、個人の業務を頭の外へ出し、いま実行する1件�
 4. 再利用する情報は [Knowledge guide](knowledge.md) に従い、GTDとは別のnoteへ育てる。
 5. Markdownを直接編集する場合は [Workspace guide](workspace.md) を確認する。
 6. 管理プロジェクトは [Project management](project-management.md)、Confluence公開は [Confluence](confluence.md)、VS Code導線は [VS Code](vscode.md) を参照する。
+7. Recovery、operation journal、outboxは [System operations](system-operations.md) を参照する。
 
 ## Mental model
 

@@ -57,11 +57,13 @@ API、CLI、backup、rollbackを検証できる。
 
 ## Current transition state
 
-- SQLite schema v1はmigration metadata、append-only `activity_events`、`outbox_items`を提供する。
+- SQLite schema v2はmigration metadata、structured entity、operation journal、append-only activity、
+  leased outboxを提供する。
 - Workspace初期化とFastAPI lifecycleがschemaを最新化する。
 - Workspace backupはSQLite backup APIでonline snapshotを作り、restore前にDatabase integrityを検証する。
-- 既存GTD、Knowledge、Managed Projectのentity stateはまだMarkdown、historyはJSONLが正本である。
-- DB tablesへlegacy eventを二重書込みしない。各domainの切替sliceで一度だけownershipを移す。
+- GTD、Knowledge、Managed Projectのregistered structured stateとhistoryはDatabase正本へ移行済みである。
+- Markdown本文はnarrative正本、frontmatterはread-only projection、JSONLは互換audit projectionである。
+- Legacy workspaceは一度だけidempotent importし、marker完了後のfrontmatterをstateへ再importしない。
 
 ## Consequences
 
@@ -70,10 +72,10 @@ API、CLI、backup、rollbackを検証できる。
 - DatabaseとMarkdownを含むbackupではraw SQLite fileをcopyせず、SQLite backup APIを使用する。
 - SQL statementはstatic literalとし、外部値はparameter bindingする。動的identifierは許可しない。
 - Remote bindはauthenticationと明示configurationのADRが決まるまで拒否する。
-- CLI全操作のHTTP client化、operation journal、domain schema、outbox workerは未実装である。
+- Operation journal、outbox worker、typed system API/HTTP clientの詳細は
+  [ADR 0007](0007-database-authority-journal-and-outbox.md)に従う。
 
 ## Unknowns
 
-- GTD、Knowledge、Managed Projectの最適な移行順はUNKNOWN。
-- Web frontend、file watcher、search index、Gantt rendererはUNKNOWN。
+- Web frontend、file watcher、domain-specific search indexはUNKNOWN。
 - Database migration失敗時の自動restore policyはUNKNOWN。

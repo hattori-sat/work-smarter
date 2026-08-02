@@ -54,7 +54,9 @@ main
     ├── feat/project-management
     ├── feat/confluence-sync
     ├── feat/vscode-integration
-    └── feat/release-quality
+    ├── feat/release-quality
+    ├── feat/gtd-gantt-completion
+    └── feat/v1-completion
 ```
 
 各`feat/*`はtest・docs・implementationを含むself-contained commit群にし、green確認後に
@@ -158,14 +160,15 @@ main
 
 ### M7 Release quality — `feat/release-quality`
 
+- Status: COMPLETE in V1 completion
+
 - [x] cross-feature user journey acceptance tests
-- [ ] corrupt/crash/concurrency/recovery tests（single-file atomicityとconcurrencyはcovered。
-  multi-file crash recoveryはUNKNOWN）
-- [ ] package install and clean-room smoke test
-- [ ] user manual完成
-- [ ] developer architecture/API/contribution manual完成
-- [ ] changelog and v1 release checklist
-- [ ] `dev/work-smarter-v1` → `main` merge
+- [x] corrupt/crash/concurrency/recovery tests（journal、outbox lease、corrupt projection、backupを含む）
+- [x] package install and clean-room smoke test
+- [x] user manual完成
+- [x] developer architecture/API/contribution manual完成
+- [x] changelog and v1 release checklist
+- [x] `dev/work-smarter-v1` → `main` merge
 
 ### M8 Target architecture foundation — `feat/architecture-foundation`
 
@@ -182,9 +185,9 @@ main
 Follow-up slices:
 
 - [x] SQLite snapshotを含む整合backup/restore (`feat/sqlite-backup`)
-- [ ] domain単位のDatabase source-of-truth移行
-- [ ] CLI domain/resource/operation treeとHTTP client化
-- [ ] operation journalとoutbox worker
+- [x] domain単位のDatabase source-of-truth移行
+- [x] CLI domain/resource/operation treeとHTTP client化
+- [x] operation journalとoutbox worker
 
 移行中の正本境界、比較案、未確認事項は
 `docs/architecture/0003-hybrid-source-of-truth-and-local-application-server.md`を参照する。
@@ -234,6 +237,82 @@ Follow-up slices:
 - [x] fixed subprocess argument、timeout、missing/failure typed error
 - [x] `--format html` CLIと`text/html` FastAPI route
 - [x] ADR 0005、user/developer/spec/reference documentation
+
+### M11 GTD completion and interactive Gantt — `feat/gtd-gantt-completion`
+
+- Current branch: `feat/gtd-gantt-completion`
+- Status: COMPLETE
+- Base: `origin/dev/work-smarter-v1` at `36e1fbd`
+
+Outcome:
+
+- [x] 添付4+1 ArchitectureのPhase 2 GTD Coreを、既存のMarkdown/JSONL正本契約を壊さず完了する
+- [x] Managed ProjectのscheduleをWorking Calendarと4 dependency typeで計算する
+- [x] scheduleの根拠、earliest/latest、total/free float、critical path、delayを説明可能にする
+- [x] baseline/current/progress/milestone/dependencyを対話的HTML Ganttへ投影する
+- [x] canonical CLI、typed HTTP API、user/developer docs、開発環境requirementsを揃える
+
+GTD acceptance:
+
+- [x] standalone GTD projectをcreate/list/show/completeでき、actionとの境界を維持する
+- [x] `ws gtd <resource> <operation>`をcanonical commandとして提供し、既存root aliasも維持する
+- [x] action/projectをunique ID prefixで解決し、picker出力と`$EDITOR` openを提供する
+- [x] GTD projectのCLI/API state transitionにallowed/refused/audit/reload coverageを持つ
+
+Scheduling and Gantt acceptance:
+
+- [x] Finish-to-Start / Start-to-Start / Finish-to-Finish / Start-to-Finishとlead/lagを扱う
+- [x] working weekdays、休日、例外稼働日をscheduleへ反映する
+- [x] dependency cycle、missing predecessor、矛盾するdate constraintをpartial writeなしで拒否する
+- [x] earliest/latest start/finish、total/free float、critical path、project finishを導出する
+- [x] work itemごとに開始日を決めたdependency/calendar/constraint理由を返す
+- [x] Gantt HTMLにWBS、owner、progress、baseline/current、delay、float、critical path、milestone、dependency lineを表示する
+- [x] Gantt HTMLにfilter、zoom、today markerを持たせ、user textをescapeする
+- [x] CLI exportとtyped HTTP projectionが同じrenderer portを使う
+
+Verification and delivery:
+
+- [x] 既存212 testsを回帰させず、新規acceptance/unit/API/CLI/security testを追加する（全222 tests）
+- [x] `requirements.txt` / `requirements-dev.txt`を`pyproject.toml`のinstall extrasへ接続する
+- [x] user/developer/spec/architecture documentationを更新する
+- [x] `ruff check`、`ruff format --check`、全`pytest`、requirements install、`pip check`を通す
+
+Facts / Inferences / Hypotheses:
+
+- Fact: repository contractではMarkdown/YAMLとappend-only eventがauthoritativeである。
+- Fact: 添付Draft 0.1は将来Targetとしてstructured dataのDatabase正本化を提案している。
+- Inference: このsliceでDBへ一括移行すると、公開schema、doctor、backup、直接編集契約を同時に壊すriskが高い。
+- Decision: 本sliceは現行authoritative contract上で機能を完成させ、DB source-of-truth移行は独立sliceに残す。
+- Hypothesis: dependencyをHTMLへ埋め込むself-contained SVG rendererは、外部CDN/libraryよりlocal-first運用に適する。
+- UNKNOWN: Web frontend全体の技術選定とProject Scenario永続modelはarchitecture上Pendingであり、本sliceの
+  Gantt read-only projectionには含めない。
+
+### M12 V1 completion — `feat/v1-completion`
+
+- Current branch: `feat/v1-completion`
+- Status: COMPLETE
+- Base: local `dev/work-smarter-v1` after the tested GTD/Gantt `--no-ff` merge
+
+Outcome:
+
+- [x] structured entity stateをDatabase正本、Markdown bodyをnarrative正本としてdomain単位で移行する
+- [x] legacy Markdown workspaceを一度だけimportし、以後のfrontmatterをread-only projectionにする
+- [x] operation journalでfile/Database境界のcrashを検出・回復する
+- [x] transactional outboxをclaim/retry/idempotent completionできるworkerとして完成する
+- [x] canonical domain/resource/operation CLIとtyped HTTP client transportを揃える
+- [x] crash/recovery/concurrency/backup acceptanceを追加する
+- [x] clean-room package smoke、user/developer manual、changelog、V1 release checklistを完成する
+- [x] 全品質gate後にfeature→dev→mainを規約どおりmergeする
+
+Facts / Inferences / Hypotheses / Unknowns:
+
+- Fact: SQLite schema v1にはappend-only activity eventとoutbox tableがあるが、domain recordとjournal APIはない。
+- Fact: existing workspaceはMarkdown frontmatterをstructured stateの正本としている。
+- Inference: domainごとの専用SQL tableを一括導入するより、provider-neutral structured record Portを先に置き、
+  registered kindごとにownershipを切り替える方がmigration/rollback riskが低い。
+- Hypothesis: durable intent→atomic Markdown projection→Database commitのjournal protocolで、正常な例外はrollbackし、
+  process crashだけを次回open時にdeterministicにrecoverできる。
+- UNKNOWN: remote authenticationとmulti-user conflict resolutionはloopback-only V1の範囲外である。
 
 ## Definition of Done for every slice
 

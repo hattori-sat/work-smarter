@@ -139,7 +139,8 @@ promotionは次を行います。
 
 ## Keep the graph healthy
 
-Markdown/frontmatterの直接編集も正式な使い方です。編集後はKnowledge固有の検査を実行します。
+Markdown本文の直接編集は正式な使い方です。FrontmatterはDatabase projectionなので、tag、link、source等の
+structured fieldは`ws knowledge note update/link`を使います。編集後はKnowledge固有の検査を実行します。
 
 ```bash
 ws knowledge doctor

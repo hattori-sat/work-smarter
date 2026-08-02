@@ -10,7 +10,7 @@ GTD、project management、User Story Mapping、publishingを、同じworkspace�
 
 ## Facts
 
-- 最初のproductはGTDであり、他featureはまだ未実装である。
+- GTD、Knowledge、Managed Project、publishingは実装済みであり、別々のstate machineを維持する。
 - Markdownと監査eventは長期保存するため、directory・kind・IDの衝突は後から直しにくい。
 - CLI、HTTP API、将来のVS Code UIは同じPython application serviceを使う。
 

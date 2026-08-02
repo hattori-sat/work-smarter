@@ -558,6 +558,52 @@ class GtdService:
         ]
         return [project for project in projects if statuses is None or project.status in statuses]
 
+    def create_project(
+        self,
+        *,
+        title: str,
+        outcome: str,
+        project_id: str | None = None,
+        area: str | None = None,
+        review_every_days: int = 7,
+        tags: Iterable[str] | None = None,
+        body: str | None = None,
+    ) -> GtdProject:
+        """Create an outcome directly, without inventing an Inbox provenance record."""
+
+        clean_title = title.strip()
+        clean_outcome = outcome.strip()
+        if not clean_title or not clean_outcome:
+            raise InvalidTransitionError("A GTD project requires both title and outcome")
+        try:
+            project = GtdProject(
+                id=project_id or _new_id("GPR"),
+                title=clean_title,
+                outcome=clean_outcome,
+                area=area,
+                review_every_days=review_every_days,
+                tags=_normalize_tags(tags),
+            )
+        except ValidationError as exc:
+            raise InvalidTransitionError(str(exc)) from exc
+        content = body or render_gtd_template(
+            self.workspace,
+            "project.md",
+            outcome=project.outcome,
+            source_id="direct creation",
+        )
+        with self.workspace.lock():
+            path = self.workspace.path_for(project)
+            if path.exists():
+                raise InvalidTransitionError(f"GTD project ID already exists: {project.id}")
+            self.workspace.write(project, content)
+            self._event(
+                EventType.PROJECT_CREATED,
+                entity_id=project.id,
+                payload={"outcome": project.outcome},
+            )
+        return project
+
     def _task_record(self, task_id: str) -> EntityRecord[Task]:
         return cast(
             EntityRecord[Task],
@@ -630,6 +676,21 @@ class GtdService:
 
     def get_task(self, task_id: str) -> Task:
         return self._task_record(task_id).entity
+
+    def get_project(self, project_id: str) -> GtdProject:
+        return self._project_record(project_id).entity
+
+    def document_ref(self, query: str) -> EntityRef:
+        """Resolve a human ID prefix to an editor-safe public document reference."""
+
+        record = self.workspace.find_record(query, kinds={"task", "gtd_project"})
+        entity = cast(Task | GtdProject, record.entity)
+        return EntityRef(
+            id=entity.id,
+            kind=entity.kind,
+            title=entity.title,
+            path=self.workspace.relative(record.path),
+        )
 
     def define_task(
         self,

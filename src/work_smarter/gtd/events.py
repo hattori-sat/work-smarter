@@ -32,6 +32,7 @@ class EventType(StrEnum):
     TASK_UNBLOCKED = "gtd.task.unblocked"
     TASK_WAITING_FOLLOWED_UP = "gtd.task.waiting.followed_up"
     TASK_WAITING_RESOLVED = "gtd.task.waiting.resolved"
+    PROJECT_CREATED = "gtd.project.created"
     PROJECT_COMPLETED = "gtd.project.completed"
     REVIEW_STARTED = "gtd.review.started"
     REVIEW_STEP_CHECKED = "gtd.review.step.checked"

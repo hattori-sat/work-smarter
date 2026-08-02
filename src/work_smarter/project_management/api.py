@@ -7,10 +7,12 @@ from datetime import date
 from decimal import Decimal
 from typing import Annotated, Literal, Self
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
+from work_smarter.project_management.gantt import HtmlGanttRenderer
 from work_smarter.project_management.models import (
+    BaselineRecord,
     CompletionCriterion,
     CompletionCriterionStatus,
     EvidenceRecord,
@@ -25,7 +27,10 @@ from work_smarter.project_management.models import (
     RegisterItem,
     RegisterItemKind,
     RegisterItemStatus,
+    ScheduleDependency,
+    ScheduleExplanation,
     ScheduleProjection,
+    WorkingCalendar,
     WorkPackage,
     WorkStatus,
 )
@@ -62,6 +67,7 @@ class ProjectCreateRequest(ProjectApiModel):
     manager: NonBlankString | None = None
     planned_start_on: date | None = None
     target_due_on: date | None = None
+    working_calendar: WorkingCalendar | None = None
     constraints: list[NonBlankString] = Field(default_factory=list)
     assumptions: list[NonBlankString] = Field(default_factory=list)
     completion_criteria: list[NonBlankString] = Field(min_length=1)
@@ -78,6 +84,7 @@ class ProjectUpdateRequest(ProjectApiModel):
     manager: NonBlankString | None = None
     planned_start_on: date | None = None
     target_due_on: date | None = None
+    working_calendar: WorkingCalendar | None = None
     qcd: QcdPlan | None = None
     gtd_action_ids: list[EntityId] | None = None
 
@@ -112,8 +119,11 @@ class WorkPackageCreateRequest(ProjectApiModel):
     phase_id: EntityId | None = None
     owner: NonBlankString | None = None
     dependency_ids: list[EntityId] = Field(default_factory=list)
+    dependencies: list[ScheduleDependency] = Field(default_factory=list)
     start_on: date | None = None
     due_on: date | None = None
+    progress_percent: int = Field(default=0, ge=0, le=100)
+    jira_status: NonBlankString | None = None
     gtd_action_ids: list[EntityId] = Field(default_factory=list)
     work_package_id: EntityId | None = None
 
@@ -125,8 +135,11 @@ class WorkPackageUpdateRequest(ProjectApiModel):
     owner: NonBlankString | None = None
     duration_days: int | None = Field(default=None, ge=1)
     dependency_ids: list[EntityId] | None = None
+    dependencies: list[ScheduleDependency] | None = None
     start_on: date | None = None
     due_on: date | None = None
+    progress_percent: int | None = Field(default=None, ge=0, le=100)
+    jira_status: NonBlankString | None = None
     gtd_action_ids: list[EntityId] | None = None
 
 
@@ -140,10 +153,12 @@ class MilestoneCreateRequest(ProjectApiModel):
     phase_id: EntityId | None = None
     owner: NonBlankString | None = None
     dependency_ids: list[EntityId] = Field(default_factory=list)
+    dependencies: list[ScheduleDependency] = Field(default_factory=list)
     planned_on: date | None = None
     due_on: date | None = None
     completion_criteria: list[NonBlankString] = Field(default_factory=list)
     milestone_id: EntityId | None = None
+    jira_status: NonBlankString | None = None
 
 
 class MilestoneUpdateRequest(ProjectApiModel):
@@ -152,13 +167,19 @@ class MilestoneUpdateRequest(ProjectApiModel):
     phase_id: EntityId | None = None
     owner: NonBlankString | None = None
     dependency_ids: list[EntityId] | None = None
+    dependencies: list[ScheduleDependency] | None = None
     planned_on: date | None = None
     due_on: date | None = None
+    jira_status: NonBlankString | None = None
 
 
 class MilestoneTransitionRequest(ProjectApiModel):
     status: MilestoneStatus
     achieved_on: date | None = None
+
+
+class BaselineCreateRequest(ProjectApiModel):
+    label: NonBlankString
 
 
 class EvidenceCreateRequest(ProjectApiModel):
@@ -223,7 +244,7 @@ class RegisterItemUpdateRequest(ProjectApiModel):
 
 class RenderedProjectProjection(ProjectApiModel):
     project_id: str
-    format: Literal["table", "mermaid", "html", "markdown"]
+    format: Literal["table", "mermaid", "html", "markdown", "gantt_html"]
     media_type: str
     content: str
 
@@ -425,12 +446,51 @@ def create_project_management_router(
     ) -> ScheduleProjection:
         return service.compute_schedule(project_id)
 
+    @router.get("/{project_id}/schedule/{item_id}/explanation")
+    def schedule_explanation(
+        project_id: str,
+        item_id: str,
+        service: ProjectManagementService = service_dep,
+    ) -> ScheduleExplanation:
+        return service.explain_schedule(project_id, item_id)
+
+    @router.get("/{project_id}/gantt")
+    def gantt_projection(
+        project_id: str,
+        today: Annotated[date | None, Query()] = None,
+        service: ProjectManagementService = service_dep,
+    ) -> RenderedProjectProjection:
+        document = service.get(project_id)
+        schedule = service.compute_schedule(project_id)
+        renderer = HtmlGanttRenderer()
+        return RenderedProjectProjection(
+            project_id=document.project.id,
+            format=renderer.format,
+            media_type=renderer.media_type,
+            content=renderer.render(document.project, schedule, today=today),
+        )
+
     @router.get("/{project_id}/qcd")
     def qcd_projection(
         project_id: str,
         service: ProjectManagementService = service_dep,
     ) -> QcdProjection:
         return service.qcd_projection(project_id)
+
+    @router.post("/{project_id}/baselines", status_code=201)
+    def create_baseline(
+        project_id: str,
+        payload: BaselineCreateRequest,
+        service: ProjectManagementService = service_dep,
+    ) -> BaselineRecord:
+        return service.create_baseline(project_id, label=payload.label)
+
+    @router.get("/{project_id}/baselines")
+    def list_baselines(
+        project_id: str,
+        service: ProjectManagementService = service_dep,
+    ) -> list[BaselineRecord]:
+        return service.get(project_id).project.baselines
 
     def projection_inputs(
         project_id: str,
@@ -498,6 +558,7 @@ def create_project_management_router(
 
 
 __all__ = [
+    "BaselineCreateRequest",
     "CompletionCriterionResolutionRequest",
     "EvidenceCreateRequest",
     "MilestoneCreateRequest",
