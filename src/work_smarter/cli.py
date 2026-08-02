@@ -14,6 +14,7 @@ import typer
 from work_smarter.composition import initialize_workspace, open_workspace
 from work_smarter.confluence.cli import app as confluence_app
 from work_smarter.errors import WorkSmarterError
+from work_smarter.gtd.cli import app as gtd_app
 from work_smarter.gtd.models import (
     ClarifyDecision,
     Commitment,
@@ -60,8 +61,10 @@ server_app = typer.Typer(
 )
 app.add_typer(task_app, name="task")
 app.add_typer(review_app, name="review")
+app.add_typer(gtd_app, name="gtd")
 app.add_typer(knowledge_app, name="knowledge")
 app.add_typer(project_management_app, name="pm")
+app.add_typer(project_management_app, name="project")
 app.add_typer(confluence_app, name="confluence")
 app.add_typer(workspace_app, name="workspace")
 app.add_typer(server_app, name="server")

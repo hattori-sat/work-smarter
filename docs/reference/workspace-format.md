@@ -31,6 +31,27 @@ Targetの正本境界は[ADR 0003](../architecture/0003-hybrid-source-of-truth-a
 `knowledge/gtd/`と`knowledge/notes/`は同じ親directoryにあるが、前者はGTD、後者はKnowledgeが所有する。
 Project management featureは `gtd/projects/` を再利用しない。
 
+### Managed Project schedule fields
+
+Managed Projectの`working_calendar`は`working_weekdays`（月曜=0〜日曜=6）、`non_working_days`、
+`additional_working_days`を持つ。互換性のためfield未記載時は週7日を稼働日とする。
+
+Work packageとmilestoneの`dependencies`は次のshapeを持つ。旧`dependency_ids`は
+Finish-to-Start / lag 0として読み込み、typed entryが同じpredecessorにあればtyped entryを優先する。
+
+```yaml
+dependencies:
+  - predecessor_id: WP-DESIGN
+    type: finish_to_start
+    lag_days: 1
+progress_percent: 40
+jira_status: In Progress
+```
+
+`type`は`finish_to_start`、`start_to_start`、`finish_to_finish`、`start_to_finish`のいずれか。
+`progress_percent`は0〜100である。Baselineはcontent hashだけでなく、その時点のschedule item ID、
+start、finishをimmutable snapshotとして保持する。Gantt HTMLはこれらから再生成できるprojectionである。
+
 ## Markdown entity
 
 すべての管理対象entityはUTF-8 Markdownで、先頭にYAML mappingを持つ。

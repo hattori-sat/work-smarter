@@ -41,6 +41,7 @@ from work_smarter.gtd.models import (
     Impact,
     InboxItem,
     MetricsReport,
+    ProjectStatus,
     RecurrenceFrequency,
     RelationType,
     ReviewReport,
@@ -129,6 +130,15 @@ class ClarifyRequest(ApiModel):
     urgency: Urgency | None = None
     impact: Impact | None = None
     commitment: Commitment | None = None
+
+
+class GtdProjectCreateRequest(ApiModel):
+    title: str = Field(min_length=1)
+    outcome: str = Field(min_length=1)
+    project_id: str | None = None
+    area: str | None = None
+    review_every_days: int = Field(default=7, gt=0)
+    tags: list[str] = Field(default_factory=list)
 
 
 class StartRequest(ApiModel):
@@ -294,6 +304,27 @@ def create_gtd_router(service_dependency: Any) -> APIRouter:
         fields = payload.model_dump(exclude_none=True)
         decision = fields.pop("decision")
         return service.clarify(item_id, decision, **fields)
+
+    @router.get("/projects")
+    def list_projects(
+        status: Annotated[list[ProjectStatus] | None, Query()] = None,
+        service: GtdService = service_dep,
+    ) -> list[GtdProject]:
+        return service.list_projects(set(status) if status else None)
+
+    @router.post("/projects", status_code=201)
+    def create_project(
+        payload: GtdProjectCreateRequest,
+        service: GtdService = service_dep,
+    ) -> GtdProject:
+        return service.create_project(**payload.model_dump())
+
+    @router.get("/projects/{project_id}")
+    def get_project(
+        project_id: str,
+        service: GtdService = service_dep,
+    ) -> GtdProject:
+        return service.get_project(project_id)
 
     @router.get("/tasks")
     def list_tasks(service: GtdService = service_dep) -> list[Task]:

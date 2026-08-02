@@ -87,6 +87,22 @@ class WorkStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
+class DependencyType(StrEnum):
+    FINISH_TO_START = "finish_to_start"
+    START_TO_START = "start_to_start"
+    FINISH_TO_FINISH = "finish_to_finish"
+    START_TO_FINISH = "start_to_finish"
+
+    @property
+    def label(self) -> str:
+        return {
+            DependencyType.FINISH_TO_START: "Finish-to-Start",
+            DependencyType.START_TO_START: "Start-to-Start",
+            DependencyType.FINISH_TO_FINISH: "Finish-to-Finish",
+            DependencyType.START_TO_FINISH: "Start-to-Finish",
+        }[self]
+
+
 class MilestoneStatus(StrEnum):
     PLANNED = "planned"
     ACHIEVED = "achieved"
@@ -324,6 +340,54 @@ class Stakeholder(StrictModel):
         return _optional_text(value, "communication plan")
 
 
+class WorkingCalendar(StrictModel):
+    """Project-local working days; weekday numbers follow ``date.weekday``."""
+
+    # All calendar days preserve pre-calendar workspace behavior.  Projects
+    # opt into a business week explicitly, so existing schedules do not move.
+    working_weekdays: list[int] = Field(default_factory=lambda: list(range(7)))
+    non_working_days: list[date] = Field(default_factory=list)
+    additional_working_days: list[date] = Field(default_factory=list)
+
+    @field_validator("working_weekdays")
+    @classmethod
+    def validate_weekdays(cls, values: list[int]) -> list[int]:
+        normalized = sorted(set(values))
+        if not normalized or any(value < 0 or value > 6 for value in normalized):
+            raise ValueError("working_weekdays must contain unique values from 0 through 6")
+        return normalized
+
+    @field_validator("non_working_days", "additional_working_days")
+    @classmethod
+    def normalize_dates(cls, values: list[date]) -> list[date]:
+        return sorted(set(values))
+
+    @model_validator(mode="after")
+    def validate_exceptions(self) -> WorkingCalendar:
+        overlap = set(self.non_working_days) & set(self.additional_working_days)
+        if overlap:
+            raise ValueError("a date cannot be both non-working and additionally working")
+        return self
+
+    def is_working_day(self, value: date) -> bool:
+        if value in self.additional_working_days:
+            return True
+        if value in self.non_working_days:
+            return False
+        return value.weekday() in self.working_weekdays
+
+
+class ScheduleDependency(StrictModel):
+    predecessor_id: str
+    type: DependencyType = DependencyType.FINISH_TO_START
+    lag_days: int = Field(default=0, ge=-3650, le=3650)
+
+    @field_validator("predecessor_id")
+    @classmethod
+    def validate_predecessor_id(cls, value: str) -> str:
+        return _id(value, "dependency predecessor ID")
+
+
 class Phase(StrictModel):
     id: str
     title: str
@@ -359,8 +423,11 @@ class WorkPackage(StrictModel):
     status: WorkStatus = WorkStatus.PLANNED
     duration_days: int = Field(ge=1)
     dependency_ids: list[str] = Field(default_factory=list)
+    dependencies: list[ScheduleDependency] = Field(default_factory=list)
     start_on: date | None = None
     due_on: date | None = None
+    progress_percent: int = Field(default=0, ge=0, le=100)
+    jira_status: str | None = None
     completion_criteria: list[CompletionCriterion] = Field(default_factory=list, min_length=1)
     gtd_action_ids: list[str] = Field(default_factory=list)
 
@@ -374,7 +441,7 @@ class WorkPackage(StrictModel):
     def validate_title(cls, value: str) -> str:
         return _text(value, "work package title")
 
-    @field_validator("description", "owner")
+    @field_validator("description", "owner", "jira_status")
     @classmethod
     def validate_optional_text(cls, value: str | None, info: object) -> str | None:
         return _optional_text(value, str(getattr(info, "field_name", "work package field")))
@@ -388,6 +455,13 @@ class WorkPackage(StrictModel):
     @classmethod
     def validate_dependency_ids(cls, values: list[str]) -> list[str]:
         return _unique_ids(values, "dependency ID")
+
+    @model_validator(mode="after")
+    def validate_dependencies(self) -> WorkPackage:
+        predecessors = [item.predecessor_id.casefold() for item in self.dependencies]
+        if len(predecessors) != len(set(predecessors)):
+            raise ValueError("typed dependency predecessor IDs must be unique")
+        return self
 
     @field_validator("gtd_action_ids")
     @classmethod
@@ -403,9 +477,11 @@ class Milestone(StrictModel):
     owner: str | None = None
     status: MilestoneStatus = MilestoneStatus.PLANNED
     dependency_ids: list[str] = Field(default_factory=list)
+    dependencies: list[ScheduleDependency] = Field(default_factory=list)
     planned_on: date | None = None
     due_on: date | None = None
     achieved_on: date | None = None
+    jira_status: str | None = None
     completion_criteria: list[CompletionCriterion] = Field(default_factory=list)
 
     @field_validator("id")
@@ -418,7 +494,7 @@ class Milestone(StrictModel):
     def validate_title(cls, value: str) -> str:
         return _text(value, "milestone title")
 
-    @field_validator("description", "owner")
+    @field_validator("description", "owner", "jira_status")
     @classmethod
     def validate_optional_text(cls, value: str | None, info: object) -> str | None:
         return _optional_text(value, str(getattr(info, "field_name", "milestone field")))
@@ -439,6 +515,9 @@ class Milestone(StrictModel):
             raise ValueError("an achieved milestone requires achieved_on")
         if self.status is not MilestoneStatus.ACHIEVED and self.achieved_on is not None:
             raise ValueError("only an achieved milestone can have achieved_on")
+        predecessors = [item.predecessor_id.casefold() for item in self.dependencies]
+        if len(predecessors) != len(set(predecessors)):
+            raise ValueError("typed dependency predecessor IDs must be unique")
         return self
 
 
@@ -697,12 +776,30 @@ class ChangeRequest(StrictModel):
         return self
 
 
+class BaselineScheduleItem(StrictModel):
+    id: str
+    start_on: date
+    finish_on: date
+
+    @field_validator("id")
+    @classmethod
+    def validate_id(cls, value: str) -> str:
+        return _id(value, "baseline schedule item ID")
+
+    @model_validator(mode="after")
+    def validate_dates(self) -> BaselineScheduleItem:
+        if self.finish_on < self.start_on:
+            raise ValueError("baseline finish cannot precede start")
+        return self
+
+
 class BaselineRecord(StrictModel):
     id: str
     label: str
     project_revision: int = Field(ge=1)
     content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     event_id: str
+    schedule_items: list[BaselineScheduleItem] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=utc_now)
 
     @field_validator("id", "event_id")
@@ -734,6 +831,7 @@ class ManagedProject(StrictModel):
     manager: str | None = None
     planned_start_on: date | None = None
     target_due_on: date | None = None
+    working_calendar: WorkingCalendar = Field(default_factory=WorkingCalendar)
     constraints: list[Constraint] = Field(default_factory=list)
     assumptions: list[Assumption] = Field(default_factory=list)
     completion_criteria: list[CompletionCriterion] = Field(min_length=1)
@@ -826,11 +924,21 @@ class ScheduleItem(StrictModel):
     title: str
     duration_days: int = Field(ge=0)
     dependency_ids: list[str]
+    dependencies: list[ScheduleDependency] = Field(default_factory=list)
     scheduled_start_on: date
     scheduled_finish_on: date
+    earliest_start_on: date | None = None
+    earliest_finish_on: date | None = None
+    latest_start_on: date | None = None
+    latest_finish_on: date | None = None
     due_on: date | None = None
     critical: bool = False
     total_float_days: int = Field(ge=0)
+    free_float_days: int = Field(default=0, ge=0)
+    progress_percent: int = Field(default=0, ge=0, le=100)
+    owner: str | None = None
+    jira_status: str | None = None
+    delay_days: int = Field(default=0, ge=0)
     constraint_violation: str | None = None
 
 
@@ -840,7 +948,17 @@ class ScheduleProjection(StrictModel):
     topological_order: list[str]
     critical_path: list[str]
     total_duration_days: int = Field(ge=0)
+    project_finish_on: date | None = None
     items: list[ScheduleItem]
+
+
+class ScheduleExplanation(StrictModel):
+    project_id: str
+    item_id: str
+    scheduled_start_on: date
+    scheduled_finish_on: date
+    driving_predecessor_id: str | None = None
+    reasons: list[str] = Field(default_factory=list)
 
 
 class QcdProjection(StrictModel):
@@ -894,12 +1012,14 @@ __all__ = [
     "Assumption",
     "AssumptionStatus",
     "BaselineRecord",
+    "BaselineScheduleItem",
     "ChangeKind",
     "ChangeRequest",
     "ChangeStatus",
     "CompletionCriterion",
     "CompletionCriterionStatus",
     "Constraint",
+    "DependencyType",
     "EvidenceRecord",
     "GateDecision",
     "GateReview",
@@ -922,10 +1042,13 @@ __all__ = [
     "RequirementKind",
     "RequirementStatus",
     "ScheduleItem",
+    "ScheduleDependency",
+    "ScheduleExplanation",
     "ScheduleProjection",
     "Stakeholder",
     "WorkPackage",
     "WorkStatus",
+    "WorkingCalendar",
     "VerificationActivity",
     "VerificationMethod",
     "VerificationRecord",

@@ -51,12 +51,14 @@ from work_smarter.project_management.events import (
 from work_smarter.project_management.models import (
     Assumption,
     BaselineRecord,
+    BaselineScheduleItem,
     ChangeKind,
     ChangeRequest,
     ChangeStatus,
     CompletionCriterion,
     CompletionCriterionStatus,
     Constraint,
+    DependencyType,
     EvidenceRecord,
     GateDecision,
     GateReview,
@@ -77,12 +79,15 @@ from work_smarter.project_management.models import (
     Requirement,
     RequirementKind,
     RequirementStatus,
+    ScheduleDependency,
+    ScheduleExplanation,
     ScheduleItem,
     ScheduleProjection,
     VerificationActivity,
     VerificationMethod,
     VerificationRecord,
     VerificationResult,
+    WorkingCalendar,
     WorkPackage,
     WorkStatus,
     utc_now,
@@ -99,6 +104,49 @@ def _new_id(prefix: str) -> str:
 def _body(value: str) -> str:
     cleaned = value.strip("\n").rstrip()
     return cleaned + "\n" if cleaned.strip() else ""
+
+
+class _CalendarAxis:
+    """Map project-local working dates to integer scheduling boundaries."""
+
+    def __init__(self, calendar: WorkingCalendar, anchor: date):
+        self.calendar = calendar
+        self.anchor = self.on_or_after(anchor)
+        self._dates: list[date] = [self.anchor]
+
+    def on_or_after(self, value: date) -> date:
+        current = value
+        for _ in range(3700):
+            if self.calendar.is_working_day(current):
+                return current
+            current += timedelta(days=1)
+        raise ProjectScheduleError("working calendar has no reachable working day")
+
+    def date_for_tick(self, tick: int) -> date:
+        if tick < 0:
+            raise ProjectScheduleError("schedule lead resolves before the project anchor")
+        while len(self._dates) <= tick:
+            candidate = self._dates[-1] + timedelta(days=1)
+            self._dates.append(self.on_or_after(candidate))
+        return self._dates[tick]
+
+    def tick_for_date(self, value: date) -> int:
+        target = self.on_or_after(value)
+        if target < self.anchor:
+            raise ProjectScheduleError("date constraint precedes the project anchor")
+        tick = 0
+        while self.date_for_tick(tick) < target:
+            tick += 1
+        return tick
+
+    def non_working_between(self, start: date, finish: date) -> list[date]:
+        values: list[date] = []
+        current = start
+        while current <= finish:
+            if not self.calendar.is_working_day(current):
+                values.append(current)
+            current += timedelta(days=1)
+        return values
 
 
 PROJECT_TRANSITIONS: dict[ProjectLifecycle, set[ProjectLifecycle]] = {
@@ -390,6 +438,7 @@ class ProjectManagementService:
         manager: str | None = None,
         planned_start_on: date | None = None,
         target_due_on: date | None = None,
+        working_calendar: WorkingCalendar | None = None,
         constraints: Iterable[Constraint | str] = (),
         assumptions: Iterable[Assumption | str] = (),
         completion_criteria: Iterable[CompletionCriterion | str] = (),
@@ -424,6 +473,7 @@ class ProjectManagementService:
                 manager=manager,
                 planned_start_on=planned_start_on,
                 target_due_on=target_due_on,
+                working_calendar=working_calendar or WorkingCalendar(),
                 constraints=[self._constraint(value) for value in constraints],
                 assumptions=[self._assumption(value) for value in assumptions],
                 completion_criteria=criteria,
@@ -468,6 +518,7 @@ class ProjectManagementService:
         manager: str | None = None,
         planned_start_on: date | None = None,
         target_due_on: date | None = None,
+        working_calendar: WorkingCalendar | None = None,
         qcd: QcdPlan | None = None,
         gtd_action_ids: Iterable[str] | None = None,
     ) -> ManagedProjectDocument:
@@ -482,6 +533,7 @@ class ProjectManagementService:
                 ("manager", manager),
                 ("planned_start_on", planned_start_on),
                 ("target_due_on", target_due_on),
+                ("working_calendar", working_calendar),
                 ("qcd", qcd),
             ):
                 if value is not None:
@@ -637,8 +689,11 @@ class ProjectManagementService:
         description: str | None = None,
         owner: str | None = None,
         dependency_ids: Iterable[str] = (),
+        dependencies: Iterable[ScheduleDependency] = (),
         start_on: date | None = None,
         due_on: date | None = None,
+        progress_percent: int = 0,
+        jira_status: str | None = None,
         completion_criteria: Iterable[CompletionCriterion | str] = (),
         gtd_action_ids: Iterable[str] = (),
     ) -> WorkPackage:
@@ -661,8 +716,11 @@ class ProjectManagementService:
                 description=description,
                 owner=owner,
                 dependency_ids=list(dependency_ids),
+                dependencies=list(dependencies),
                 start_on=start_on,
                 due_on=due_on,
+                progress_percent=progress_percent,
+                jira_status=jira_status,
                 completion_criteria=criteria,
                 gtd_action_ids=self._canonical_gtd_action_ids(gtd_action_ids),
             )
@@ -688,8 +746,11 @@ class ProjectManagementService:
         description: str | None = None,
         owner: str | None = None,
         dependency_ids: Iterable[str] | None = None,
+        dependencies: Iterable[ScheduleDependency] | None = None,
         start_on: date | None = None,
         due_on: date | None = None,
+        progress_percent: int | None = None,
+        jira_status: str | None = None,
         completion_criteria: Iterable[CompletionCriterion] | None = None,
         gtd_action_ids: Iterable[str] | None = None,
     ) -> WorkPackage:
@@ -707,11 +768,15 @@ class ProjectManagementService:
                 ("owner", owner),
                 ("start_on", start_on),
                 ("due_on", due_on),
+                ("progress_percent", progress_percent),
+                ("jira_status", jira_status),
             ):
                 if value is not None:
                     changes[name] = value
             if dependency_ids is not None:
                 changes["dependency_ids"] = list(dependency_ids)
+            if dependencies is not None:
+                changes["dependencies"] = list(dependencies)
             if completion_criteria is not None:
                 changes["completion_criteria"] = list(completion_criteria)
             if gtd_action_ids is not None:
@@ -738,9 +803,11 @@ class ProjectManagementService:
         description: str | None = None,
         owner: str | None = None,
         dependency_ids: Iterable[str] = (),
+        dependencies: Iterable[ScheduleDependency] = (),
         planned_on: date | None = None,
         due_on: date | None = None,
         completion_criteria: Iterable[CompletionCriterion | str] = (),
+        jira_status: str | None = None,
     ) -> Milestone:
         milestone = Milestone(
             id=milestone_id or _new_id("MS"),
@@ -749,9 +816,11 @@ class ProjectManagementService:
             description=description,
             owner=owner,
             dependency_ids=list(dependency_ids),
+            dependencies=list(dependencies),
             planned_on=planned_on,
             due_on=due_on,
             completion_criteria=[self._criterion(value) for value in completion_criteria],
+            jira_status=jira_status,
         )
         with self.workspace.lock():
             record = self._record(query)
@@ -775,9 +844,11 @@ class ProjectManagementService:
         description: str | None = None,
         owner: str | None = None,
         dependency_ids: Iterable[str] | None = None,
+        dependencies: Iterable[ScheduleDependency] | None = None,
         planned_on: date | None = None,
         due_on: date | None = None,
         completion_criteria: Iterable[CompletionCriterion] | None = None,
+        jira_status: str | None = None,
     ) -> Milestone:
         with self.workspace.lock():
             record = self._record(query)
@@ -792,11 +863,14 @@ class ProjectManagementService:
                 ("owner", owner),
                 ("planned_on", planned_on),
                 ("due_on", due_on),
+                ("jira_status", jira_status),
             ):
                 if value is not None:
                     changes[name] = value
             if dependency_ids is not None:
                 changes["dependency_ids"] = list(dependency_ids)
+            if dependencies is not None:
+                changes["dependencies"] = list(dependencies)
             if completion_criteria is not None:
                 changes["completion_criteria"] = list(completion_criteria)
             updated = Milestone.model_validate(
@@ -810,6 +884,140 @@ class ProjectManagementService:
                 payload={"milestone_id": item.id, "changed_fields": sorted(changes)},
             )
             return updated
+
+    def add_dependency(
+        self,
+        query: str,
+        successor_id: str,
+        predecessor_id: str,
+        *,
+        dependency_type: DependencyType | str = DependencyType.FINISH_TO_START,
+        lag_days: int = 0,
+    ) -> WorkPackage | Milestone:
+        """Add or replace one typed precedence relation under the workspace lock."""
+
+        with self.workspace.lock():
+            record = self._record(query)
+            project = cast(ManagedProject, record.entity)
+            collections: tuple[tuple[str, list[WorkPackage | Milestone], str], ...] = (
+                (
+                    "work_packages",
+                    cast(list[WorkPackage | Milestone], project.work_packages),
+                    "work package",
+                ),
+                (
+                    "milestones",
+                    cast(list[WorkPackage | Milestone], project.milestones),
+                    "milestone",
+                ),
+            )
+            for field, values, label in collections:
+                matches = [
+                    (index, item)
+                    for index, item in enumerate(values)
+                    if item.id.casefold().startswith(successor_id.casefold())
+                ]
+                if not matches:
+                    continue
+                if len(matches) != 1:
+                    raise ProjectConflictError(f"{successor_id!r} matches multiple schedule items")
+                index, item = matches[0]
+                canonical_predecessor = self._canonical_internal_ids(
+                    project,
+                    [predecessor_id],
+                    candidates=(node.id for node in [*project.work_packages, *project.milestones]),
+                    label="schedule predecessor",
+                )[0]
+                dependency = ScheduleDependency(
+                    predecessor_id=canonical_predecessor,
+                    type=DependencyType(dependency_type),
+                    lag_days=lag_days,
+                )
+                dependencies = [
+                    existing
+                    for existing in item.dependencies
+                    if existing.predecessor_id.casefold() != canonical_predecessor.casefold()
+                ]
+                dependencies.append(dependency)
+                legacy = [
+                    value
+                    for value in item.dependency_ids
+                    if value.casefold() != canonical_predecessor.casefold()
+                ]
+                updated = type(item).model_validate(
+                    {
+                        **item.model_dump(mode="json", exclude_computed_fields=True),
+                        "dependency_ids": legacy,
+                        "dependencies": dependencies,
+                    }
+                )
+                candidate = self._replace(project, field, index, updated)
+                event_type = WORK_PACKAGE_UPDATED if field == "work_packages" else MILESTONE_UPDATED
+                self._commit(
+                    record,
+                    candidate,
+                    event_type=event_type,
+                    payload={
+                        f"{label.replace(' ', '_')}_id": item.id,
+                        "changed_fields": ["dependencies"],
+                    },
+                )
+                return cast(WorkPackage | Milestone, updated)
+            raise ProjectItemNotFoundError(f"No schedule item matches {successor_id!r}")
+
+    def remove_dependency(
+        self,
+        query: str,
+        successor_id: str,
+        predecessor_id: str,
+    ) -> WorkPackage | Milestone:
+        with self.workspace.lock():
+            record = self._record(query)
+            project = cast(ManagedProject, record.entity)
+            for field, values in (
+                ("work_packages", project.work_packages),
+                ("milestones", project.milestones),
+            ):
+                matches = [
+                    (index, item)
+                    for index, item in enumerate(values)
+                    if item.id.casefold().startswith(successor_id.casefold())
+                ]
+                if len(matches) != 1:
+                    continue
+                index, item = matches[0]
+                typed = [
+                    value
+                    for value in item.dependencies
+                    if not value.predecessor_id.casefold().startswith(predecessor_id.casefold())
+                ]
+                legacy = [
+                    value
+                    for value in item.dependency_ids
+                    if not value.casefold().startswith(predecessor_id.casefold())
+                ]
+                if len(typed) == len(item.dependencies) and len(legacy) == len(item.dependency_ids):
+                    raise ProjectItemNotFoundError(
+                        f"No dependency from {predecessor_id!r} to {item.id}"
+                    )
+                updated = type(item).model_validate(
+                    {
+                        **item.model_dump(mode="json", exclude_computed_fields=True),
+                        "dependency_ids": legacy,
+                        "dependencies": typed,
+                    }
+                )
+                candidate = self._replace(project, field, index, updated)
+                self._commit(
+                    record,
+                    candidate,
+                    event_type=(
+                        WORK_PACKAGE_UPDATED if field == "work_packages" else MILESTONE_UPDATED
+                    ),
+                    payload={"schedule_item_id": item.id, "changed_fields": ["dependencies"]},
+                )
+                return cast(WorkPackage | Milestone, updated)
+            raise ProjectItemNotFoundError(f"No schedule item matches {successor_id!r}")
 
     def _transition_work_item(
         self,
@@ -1545,12 +1753,21 @@ class ProjectManagementService:
                 separators=(",", ":"),
             ).encode()
             event_id = _new_id("PEVT")
+            schedule = self._compute_schedule(project)
             baseline = BaselineRecord(
                 id=_new_id("BASE"),
                 label=label,
                 project_revision=project.revision,
                 content_hash=hashlib.sha256(serialized).hexdigest(),
                 event_id=event_id,
+                schedule_items=[
+                    BaselineScheduleItem(
+                        id=item.id,
+                        start_on=item.scheduled_start_on,
+                        finish_on=item.scheduled_finish_on,
+                    )
+                    for item in schedule.items
+                ],
             )
             candidate = self._validated(project, baselines=[*project.baselines, baseline])
             self._commit(
@@ -1567,35 +1784,73 @@ class ProjectManagementService:
             return baseline
 
     @staticmethod
-    def _compute_schedule(project: ManagedProject) -> ScheduleProjection:
+    def _duration(node: WorkPackage | Milestone) -> int:
+        return node.duration_days if isinstance(node, WorkPackage) else 0
+
+    @staticmethod
+    def _dependency_weight(
+        dependency: ScheduleDependency,
+        predecessor_duration: int,
+        successor_duration: int,
+    ) -> int:
+        """Convert every precedence relation to ``start_s >= start_p + weight``."""
+
+        if dependency.type is DependencyType.FINISH_TO_START:
+            return predecessor_duration + dependency.lag_days
+        if dependency.type is DependencyType.START_TO_START:
+            return dependency.lag_days
+        if dependency.type is DependencyType.FINISH_TO_FINISH:
+            return predecessor_duration - successor_duration + dependency.lag_days
+        return -successor_duration + dependency.lag_days
+
+    @staticmethod
+    def _schedule_dependencies(
+        node: WorkPackage | Milestone,
+        canonical: dict[str, str],
+    ) -> list[ScheduleDependency]:
+        typed = {item.predecessor_id.casefold(): item for item in node.dependencies}
+        for predecessor_id in node.dependency_ids:
+            typed.setdefault(
+                predecessor_id.casefold(),
+                ScheduleDependency(predecessor_id=predecessor_id),
+            )
+        resolved: list[ScheduleDependency] = []
+        for dependency in typed.values():
+            predecessor_id = canonical.get(dependency.predecessor_id.casefold())
+            if predecessor_id is None:
+                raise ProjectScheduleError(
+                    f"{node.id} has missing dependency {dependency.predecessor_id!r}"
+                )
+            if predecessor_id == node.id:
+                raise ProjectScheduleError(f"dependency cycle detected at {node.id}")
+            resolved.append(dependency.model_copy(update={"predecessor_id": predecessor_id}))
+        return sorted(resolved, key=lambda item: item.predecessor_id)
+
+    @classmethod
+    def _compute_schedule(cls, project: ManagedProject) -> ScheduleProjection:
         nodes: dict[str, WorkPackage | Milestone] = {}
         for item in [*project.work_packages, *project.milestones]:
             if item.id in nodes:
                 raise ProjectScheduleError(f"duplicate schedule node {item.id!r}")
             nodes[item.id] = item
         canonical = {node_id.casefold(): node_id for node_id in nodes}
-        dependencies: dict[str, list[str]] = {}
-        successors: dict[str, list[str]] = defaultdict(list)
+        dependencies: dict[str, list[ScheduleDependency]] = {}
+        successors: dict[str, list[tuple[str, ScheduleDependency]]] = defaultdict(list)
         indegree: dict[str, int] = {}
         for node_id, node in nodes.items():
-            resolved: list[str] = []
-            for dependency in node.dependency_ids:
-                target = canonical.get(dependency.casefold())
-                if target is None:
-                    raise ProjectScheduleError(f"{node_id} has missing dependency {dependency!r}")
-                if target == node_id:
-                    raise ProjectScheduleError(f"dependency cycle detected at {node_id}")
-                resolved.append(target)
-                successors[target].append(node_id)
-            dependencies[node_id] = sorted(resolved)
+            resolved = cls._schedule_dependencies(node, canonical)
+            dependencies[node_id] = resolved
             indegree[node_id] = len(resolved)
+            for dependency in resolved:
+                successors[dependency.predecessor_id].append((node_id, dependency))
+
         queue = [node_id for node_id, degree in indegree.items() if degree == 0]
         heapq.heapify(queue)
         order: list[str] = []
         while queue:
             node_id = heapq.heappop(queue)
             order.append(node_id)
-            for successor in sorted(successors[node_id]):
+            for successor, _dependency in sorted(successors[node_id], key=lambda item: item[0]):
                 indegree[successor] -= 1
                 if indegree[successor] == 0:
                     heapq.heappush(queue, successor)
@@ -1612,44 +1867,71 @@ class ProjectManagementService:
         anchor_candidates = [*explicit_dates]
         if project.planned_start_on is not None:
             anchor_candidates.append(project.planned_start_on)
-        anchor = min(anchor_candidates) if anchor_candidates else project.created_at.date()
+        raw_anchor = min(anchor_candidates) if anchor_candidates else project.created_at.date()
+        axis = _CalendarAxis(project.working_calendar, raw_anchor)
         start_offsets: dict[str, int] = {}
         end_offsets: dict[str, int] = {}
         driving_predecessor: dict[str, str | None] = {}
         for node_id in order:
             node = nodes[node_id]
-            dependency_ends = [(end_offsets[item], item) for item in dependencies[node_id]]
-            if dependency_ends:
-                earliest, predecessor = sorted(
-                    dependency_ends, key=lambda item: (-item[0], item[1])
-                )[0]
-            else:
-                earliest, predecessor = 0, None
+            duration = cls._duration(node)
+            candidates: list[tuple[int, str]] = []
+            for dependency in dependencies[node_id]:
+                predecessor_id = dependency.predecessor_id
+                weight = cls._dependency_weight(
+                    dependency,
+                    cls._duration(nodes[predecessor_id]),
+                    duration,
+                )
+                candidates.append((start_offsets[predecessor_id] + weight, predecessor_id))
             explicit = node.start_on if isinstance(node, WorkPackage) else node.planned_on
-            explicit_offset = (explicit - anchor).days if explicit is not None else 0
-            start = max(earliest, explicit_offset)
-            duration = node.duration_days if isinstance(node, WorkPackage) else 0
+            explicit_offset = axis.tick_for_date(explicit) if explicit is not None else 0
+            dependency_offset, predecessor = (
+                sorted(candidates, key=lambda item: (-item[0], item[1]))[0]
+                if candidates
+                else (0, None)
+            )
+            start = max(0, explicit_offset, dependency_offset)
             start_offsets[node_id] = start
             end_offsets[node_id] = start + duration
-            driving_predecessor[node_id] = predecessor
+            driving_predecessor[node_id] = (
+                predecessor if predecessor is not None and dependency_offset == start else None
+            )
 
         project_end = max(end_offsets.values(), default=0)
         latest_start: dict[str, int] = {}
         for node_id in reversed(order):
-            duration = (
-                nodes[node_id].duration_days if isinstance(nodes[node_id], WorkPackage) else 0
-            )
-            child_starts = [latest_start[item] for item in successors[node_id]]
-            latest_start[node_id] = (
-                min(child_starts) - duration if child_starts else project_end - duration
-            )
+            node = nodes[node_id]
+            bounds: list[int] = []
+            for successor_id, dependency in successors[node_id]:
+                weight = cls._dependency_weight(
+                    dependency,
+                    cls._duration(node),
+                    cls._duration(nodes[successor_id]),
+                )
+                bounds.append(latest_start[successor_id] - weight)
+            latest_start[node_id] = min(bounds) if bounds else project_end - cls._duration(node)
         total_float = {
             node_id: max(0, latest_start[node_id] - start_offsets[node_id]) for node_id in order
         }
-        critical_nodes = [node_id for node_id in order if total_float[node_id] == 0]
+        free_float: dict[str, int] = {}
+        for node_id in order:
+            slacks: list[int] = []
+            for successor_id, dependency in successors[node_id]:
+                weight = cls._dependency_weight(
+                    dependency,
+                    cls._duration(nodes[node_id]),
+                    cls._duration(nodes[successor_id]),
+                )
+                slacks.append(start_offsets[successor_id] - start_offsets[node_id] - weight)
+            free_float[node_id] = max(
+                0,
+                min(slacks) if slacks else project_end - end_offsets[node_id],
+            )
+
         critical_path: list[str] = []
-        if critical_nodes:
-            end_node = sorted(critical_nodes, key=lambda item: (-end_offsets[item], item))[0]
+        if order:
+            end_node = sorted(order, key=lambda item: (-end_offsets[item], item))[0]
             cursor: str | None = end_node
             while cursor is not None and total_float[cursor] == 0:
                 critical_path.append(cursor)
@@ -1661,18 +1943,28 @@ class ProjectManagementService:
                 )
             critical_path.reverse()
 
+        baseline_by_id = {
+            item.id: item for baseline in project.baselines[-1:] for item in baseline.schedule_items
+        }
         items: list[ScheduleItem] = []
         for node_id in order:
             node = nodes[node_id]
-            duration = node.duration_days if isinstance(node, WorkPackage) else 0
-            start_on = anchor + timedelta(days=start_offsets[node_id])
-            finish_offset = end_offsets[node_id] - 1 if duration else end_offsets[node_id]
-            finish_on = anchor + timedelta(days=finish_offset)
+            duration = cls._duration(node)
+            start_on = axis.date_for_tick(start_offsets[node_id])
+            finish_tick = end_offsets[node_id] - 1 if duration else end_offsets[node_id]
+            finish_on = axis.date_for_tick(finish_tick)
+            latest_on = axis.date_for_tick(latest_start[node_id])
+            latest_finish_tick = latest_start[node_id] + duration - (1 if duration else 0)
+            latest_finish_on = axis.date_for_tick(latest_finish_tick)
             due_on = node.due_on
             violation = (
                 f"finishes after due date {due_on.isoformat()}"
                 if due_on is not None and finish_on > due_on
                 else None
+            )
+            baseline = baseline_by_id.get(node_id)
+            delay_days = (
+                max(0, (finish_on - baseline.finish_on).days) if baseline is not None else 0
             )
             items.append(
                 ScheduleItem(
@@ -1680,18 +1972,35 @@ class ProjectManagementService:
                     kind="work_package" if isinstance(node, WorkPackage) else "milestone",
                     title=node.title,
                     duration_days=duration,
-                    dependency_ids=dependencies[node_id],
+                    dependency_ids=[item.predecessor_id for item in dependencies[node_id]],
+                    dependencies=dependencies[node_id],
                     scheduled_start_on=start_on,
                     scheduled_finish_on=finish_on,
+                    earliest_start_on=start_on,
+                    earliest_finish_on=finish_on,
+                    latest_start_on=latest_on,
+                    latest_finish_on=latest_finish_on,
                     due_on=due_on,
                     critical=total_float[node_id] == 0,
                     total_float_days=total_float[node_id],
+                    free_float_days=free_float[node_id],
+                    progress_percent=(
+                        node.progress_percent if isinstance(node, WorkPackage) else 0
+                    ),
+                    owner=node.owner,
+                    jira_status=node.jira_status,
+                    delay_days=delay_days,
                     constraint_violation=violation,
                 )
             )
+        project_finish_on = max(
+            (item.scheduled_finish_on for item in items),
+            default=axis.anchor,
+        )
         return ScheduleProjection(
             project_id=project.id,
-            anchor_on=anchor,
+            anchor_on=axis.anchor,
+            project_finish_on=project_finish_on,
             topological_order=order,
             critical_path=critical_path,
             total_duration_days=project_end,
@@ -1700,6 +2009,79 @@ class ProjectManagementService:
 
     def compute_schedule(self, query: str) -> ScheduleProjection:
         return self._compute_schedule(self.get(query).project)
+
+    def explain_schedule(self, query: str, item_id: str) -> ScheduleExplanation:
+        project = self.get(query).project
+        schedule = self._compute_schedule(project)
+        by_id = {item.id: item for item in schedule.items}
+        matches = [
+            item for key, item in by_id.items() if key.casefold().startswith(item_id.casefold())
+        ]
+        if len(matches) != 1:
+            raise ProjectItemNotFoundError(
+                f"Schedule item {item_id!r} must resolve to exactly one work item or milestone"
+            )
+        item = matches[0]
+        node_by_id: dict[str, WorkPackage | Milestone] = {
+            node.id: node for node in [*project.work_packages, *project.milestones]
+        }
+        node = node_by_id[item.id]
+        canonical = {node_id.casefold(): node_id for node_id in node_by_id}
+        dependencies = self._schedule_dependencies(node, canonical)
+        axis = _CalendarAxis(project.working_calendar, schedule.anchor_on)
+        item_start_tick = axis.tick_for_date(item.scheduled_start_on)
+        candidates: list[tuple[int, str, ScheduleDependency]] = []
+        for dependency in dependencies:
+            predecessor = by_id[dependency.predecessor_id]
+            predecessor_node = node_by_id[dependency.predecessor_id]
+            weight = self._dependency_weight(
+                dependency,
+                self._duration(predecessor_node),
+                self._duration(node),
+            )
+            constraint = axis.tick_for_date(predecessor.scheduled_start_on) + weight
+            candidates.append((constraint, dependency.predecessor_id, dependency))
+        driving = (
+            sorted(candidates, key=lambda value: (-value[0], value[1]))[0] if candidates else None
+        )
+        reasons: list[str] = []
+        driving_id: str | None = None
+        if driving is not None and driving[0] == item_start_tick:
+            _constraint, driving_id, dependency = driving
+            predecessor = by_id[driving_id]
+            reasons.append(
+                f"{dependency.type.label} dependency on {driving_id} "
+                f"({predecessor.scheduled_start_on.isoformat()} to "
+                f"{predecessor.scheduled_finish_on.isoformat()})"
+            )
+            if dependency.lag_days > 0:
+                unit = "day" if dependency.lag_days == 1 else "days"
+                reasons.append(f"{dependency.lag_days} working {unit} lag")
+            elif dependency.lag_days < 0:
+                lead = abs(dependency.lag_days)
+                unit = "day" if lead == 1 else "days"
+                reasons.append(f"{lead} working {unit} lead")
+            gap_start = predecessor.scheduled_finish_on + timedelta(days=1)
+            gap_finish = item.scheduled_start_on - timedelta(days=1)
+            skipped = axis.non_working_between(gap_start, gap_finish)
+            if skipped:
+                reasons.append(
+                    "Working calendar skipped non-working dates: "
+                    + ", ".join(value.isoformat() for value in skipped)
+                )
+        explicit = node.start_on if isinstance(node, WorkPackage) else node.planned_on
+        if explicit is not None and axis.tick_for_date(explicit) == item_start_tick:
+            reasons.append(f"Explicit no-earlier-than date {explicit.isoformat()}")
+        if not reasons:
+            reasons.append(f"Project working-calendar anchor {schedule.anchor_on.isoformat()}")
+        return ScheduleExplanation(
+            project_id=project.id,
+            item_id=item.id,
+            scheduled_start_on=item.scheduled_start_on,
+            scheduled_finish_on=item.scheduled_finish_on,
+            driving_predecessor_id=driving_id,
+            reasons=reasons,
+        )
 
     @staticmethod
     def _health_from_upper(value: Decimal | int | None, amber: Decimal | int) -> Health:

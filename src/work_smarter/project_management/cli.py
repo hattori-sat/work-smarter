@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+import webbrowser
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -13,13 +14,16 @@ from typing import Any
 import typer
 
 from work_smarter.composition import open_workspace
+from work_smarter.project_management.gantt import HtmlGanttRenderer
 from work_smarter.project_management.models import (
     CompletionCriterionStatus,
+    DependencyType,
     MilestoneStatus,
     ProjectLifecycle,
     QcdSnapshot,
     RegisterItemKind,
     RegisterItemStatus,
+    WorkingCalendar,
     WorkStatus,
 )
 from work_smarter.project_management.projections import (
@@ -40,6 +44,11 @@ register_app = typer.Typer(
     help="Manage risks, opportunities, issues, and decisions.", no_args_is_help=True
 )
 qcd_app = typer.Typer(help="Manage QCD snapshots.", no_args_is_help=True)
+gantt_app = typer.Typer(help="Export an interactive offline Gantt.", no_args_is_help=True)
+dependency_app = typer.Typer(help="Manage typed schedule dependencies.", no_args_is_help=True)
+baseline_app = typer.Typer(
+    help="Capture and compare immutable schedule baselines.", no_args_is_help=True
+)
 app.add_typer(phase_app, name="phase")
 app.add_typer(work_app, name="work")
 app.add_typer(milestone_app, name="milestone")
@@ -47,6 +56,9 @@ app.add_typer(evidence_app, name="evidence")
 app.add_typer(criterion_app, name="criterion")
 app.add_typer(register_app, name="register")
 app.add_typer(qcd_app, name="qcd")
+app.add_typer(gantt_app, name="gantt")
+app.add_typer(dependency_app, name="dependency")
+app.add_typer(baseline_app, name="baseline")
 
 
 def _root_state(ctx: typer.Context) -> Any:
@@ -118,7 +130,19 @@ def create(
     start: str | None = typer.Option(None, "--start"),
     due: str | None = typer.Option(None, "--due"),
     project_id: str | None = typer.Option(None, "--id"),
+    working_weekday: list[int] | None = typer.Option(None, "--working-weekday", min=0, max=6),
+    holiday: list[str] = typer.Option([], "--holiday"),
+    working_day: list[str] = typer.Option([], "--working-day"),
 ) -> None:
+    calendar = (
+        WorkingCalendar(
+            working_weekdays=working_weekday or list(range(7)),
+            non_working_days=[_date(value, "--holiday") for value in holiday],
+            additional_working_days=[_date(value, "--working-day") for value in working_day],
+        )
+        if working_weekday is not None or holiday or working_day
+        else None
+    )
     _emit(
         ctx,
         _service(ctx).create(
@@ -129,6 +153,7 @@ def create(
             assumptions=assumption,
             planned_start_on=_date(start, "--start"),
             target_due_on=_date(due, "--due"),
+            working_calendar=calendar,
             project_id=project_id,
         ),
     )
@@ -231,8 +256,57 @@ def update_work(
     query: str,
     work_package_id: str,
     depends: list[str] | None = typer.Option(None, "--depends"),
+    days: int | None = typer.Option(None, "--days", min=1),
+    progress: int | None = typer.Option(None, "--progress", min=0, max=100),
+    owner: str | None = typer.Option(None, "--owner"),
 ) -> None:
-    _emit(ctx, _service(ctx).update_work_package(query, work_package_id, dependency_ids=depends))
+    _emit(
+        ctx,
+        _service(ctx).update_work_package(
+            query,
+            work_package_id,
+            dependency_ids=depends,
+            duration_days=days,
+            progress_percent=progress,
+            owner=owner,
+        ),
+    )
+
+
+@dependency_app.command("add")
+def add_dependency(
+    ctx: typer.Context,
+    query: str,
+    successor_id: str,
+    predecessor_id: str,
+    dependency_type: DependencyType = typer.Option(DependencyType.FINISH_TO_START, "--type"),
+    lag: int = typer.Option(0, "--lag"),
+) -> None:
+    _emit(
+        ctx,
+        _service(ctx).add_dependency(
+            query,
+            successor_id,
+            predecessor_id,
+            dependency_type=dependency_type,
+            lag_days=lag,
+        ),
+    )
+
+
+@dependency_app.command("remove")
+def remove_dependency(
+    ctx: typer.Context,
+    query: str,
+    successor_id: str,
+    predecessor_id: str,
+) -> None:
+    _emit(ctx, _service(ctx).remove_dependency(query, successor_id, predecessor_id))
+
+
+@dependency_app.command("explain")
+def explain_dependency(ctx: typer.Context, query: str, item_id: str) -> None:
+    _emit(ctx, _service(ctx).explain_schedule(query, item_id))
 
 
 @work_app.command("state")
@@ -389,6 +463,20 @@ def show_qcd(ctx: typer.Context, query: str) -> None:
     _emit(ctx, _service(ctx).qcd_projection(query))
 
 
+@baseline_app.command("create")
+def create_baseline(
+    ctx: typer.Context,
+    query: str,
+    label: str = typer.Option(..., "--label"),
+) -> None:
+    _emit(ctx, _service(ctx).create_baseline(query, label=label))
+
+
+@baseline_app.command("list")
+def list_baselines(ctx: typer.Context, query: str) -> None:
+    _emit(ctx, _service(ctx).get(query).project.baselines)
+
+
 @app.command("schedule")
 def schedule(
     ctx: typer.Context,
@@ -416,6 +504,64 @@ def schedule(
         _emit(ctx, {"project_id": document.project.id, "format": format, "content": content})
     else:
         typer.echo(content, nl=not content.endswith("\n"))
+
+
+@app.command("schedule-explain")
+def schedule_explain(ctx: typer.Context, query: str, item_id: str) -> None:
+    _emit(ctx, _service(ctx).explain_schedule(query, item_id))
+
+
+@gantt_app.command("export")
+def export_gantt(
+    ctx: typer.Context,
+    query: str,
+    output: Path = typer.Option(..., "--output"),
+    today: str | None = typer.Option(None, "--today"),
+    force: bool = typer.Option(False, "--force"),
+) -> None:
+    service = _service(ctx)
+    document = service.get(query)
+    renderer = HtmlGanttRenderer()
+    content = renderer.render(
+        document.project,
+        service.compute_schedule(query),
+        today=_date(today, "--today"),
+    )
+    _write_output(ctx, output, content, force)
+    if _root_state(ctx).json_output:
+        _emit(
+            ctx,
+            {
+                "project_id": document.project.id,
+                "format": renderer.format,
+                "output": str(output),
+            },
+        )
+
+
+@gantt_app.command("open")
+def open_gantt(
+    ctx: typer.Context,
+    query: str,
+    output: Path | None = typer.Option(None, "--output"),
+    today: str | None = typer.Option(None, "--today"),
+) -> None:
+    service = _service(ctx)
+    document = service.get(query)
+    destination = output or (
+        service.workspace.state_dir / "projections" / f"{document.project.id}-gantt.html"
+    )
+    renderer = HtmlGanttRenderer()
+    content = renderer.render(
+        document.project,
+        service.compute_schedule(query),
+        today=_date(today, "--today"),
+    )
+    _write_output(ctx, destination, content, force=True)
+    if _root_state(ctx).json_output:
+        _emit(ctx, {"project_id": document.project.id, "output": str(destination)})
+        return
+    webbrowser.open(destination.resolve().as_uri())
 
 
 @app.command("doctor")

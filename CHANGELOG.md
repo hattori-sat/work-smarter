@@ -13,6 +13,10 @@ All notable changes to Work Smarter are documented here.
 - VS Code tasks, typed OpenAPI contracts, a cross-feature overview, and checksummed workspace archives.
 - SQLite migrations, append-only activity events, outbox schema, and consistent online snapshots.
 - A selectable database port and adapter registry with backend-aware backup manifests.
+- A canonical `ws gtd` command tree with standalone GTD outcome creation, typed project API,
+  ID-prefix selection, and editor integration.
+- Working-calendar scheduling with all four precedence types, lead/lag, explainable CPM fields,
+  immutable baselines, and an offline interactive HTML Gantt.
 
 ### Security
 
